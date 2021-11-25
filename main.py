@@ -1,22 +1,13 @@
 import numpy as np
-#import bokeh
-
 from requests.api import get
-#import makerTakerOrderBookGraphs #type: ignore -this comment makes pylint ignore unresolved import error- file is importable
 from websocket import WebSocketApp
-import websocket
 from functools import partial
 import json
 import threading
 import time
-from timeit import default_timer as timer #this is used to time tasks remove for production
 import fnmatch # needed for string wildcard matching
-import re # string matching regular expression library
 import keyboard
-import os
-import argparse
 
-messageCount = 0
 
 class coin:
     def __init__(self, name, groupAmt):
@@ -64,15 +55,15 @@ class coin:
         # print('updated orderbook')
         #print(f"updated orderbook \nbids :\n{self.orderBook['bids'][:,25]}\nasks :\n{self.orderBook['asks'][:,25]}")
 
-    def addTrade(self, tradeData, messageCount): # 
+    def addTrade(self, tradeData): # 
         # round all trades up to predetermined sigfigs
         price = float(tradeData['p']) - (float(tradeData['p']) % self.tradeSigFig) + self.tradeSigFig
         # if buyer is market maker then this trade was a sell
         if tradeData['m'] == True:
-            print(f'msg: {messageCount} -sell- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["sold"][price] if price in self.trades["sold"] else 0} to get {(self.trades["sold"][price] if price in self.trades["sold"] else 0) + float(tradeData["q"])}')
+            print(f'-sell- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["sold"][price] if price in self.trades["sold"] else 0} to get {(self.trades["sold"][price] if price in self.trades["sold"] else 0) + float(tradeData["q"])}')
             self.trades['sold'].update({price:((self.trades["sold"][price] if price in  self.trades["sold"] else 0) + float(tradeData["q"]))})
         else:
-            print(f'msg: {messageCount} -buy- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
+            print(f'-buy- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
             self.trades['bought'].update({price:((self.trades["bought"][price] if price in self.trades["bought"] else 0) + float(tradeData["q"]))})
 
     def setTimeStamp(self, eventTime):
@@ -155,11 +146,9 @@ class coin:
             #return None
 
 def on_message(ws, message, SecuritiesRef):
-    global messageCount
     messaged = json.loads(message)
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
     if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
-        messageCount = 0
         if CoinObj.SnapShotRecieved == False:
             CoinObj.ordBookBuff.append(messaged['data'])
             print('appending message to buffer')
@@ -172,9 +161,7 @@ def on_message(ws, message, SecuritiesRef):
                 CoinObj.updateOrderBook('asks', eachUpdate)
             CoinObj.logData()
     elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
-        #print(f"Trade occured for {getattr(CoinObj, 'coin')} - trades since orderbook update: {messageCounter}")
-        messageCount += 1
-        CoinObj.addTrade(messaged['data'], messageCount)
+        CoinObj.addTrade(messaged['data'])
     else:      #the catch all statement
         print('Incoming message being handled incorrectly.')
 
