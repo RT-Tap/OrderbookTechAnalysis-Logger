@@ -16,20 +16,7 @@ import keyboard
 import os
 import argparse
 
-# tradeAlarmPrice = {'upperLimit':None,'lowerLimit':None, 'audibleAlarm':False, 'textAlarm':False, 'lastAlarm':None}
-# #parse arguments (if there were any) to skip using manual entry
-# parser = argparse.ArgumentParser(description=' \n Warning: if you pass one argument you must pass all which you want as manual entry is skipped.')
-# parser.add_argument('-l','--lolim', dest='lowerLimit', type=str, help='The lower limit at which an alarm should sound.') #can also use dest='lolim' to name the argument 
-# parser.add_argument('-u','--uplim', dest='upperLimit', type=str, help='The upper limit at which an alarm should sound') #luckily python smart and already inferred this
-# parser.add_argument('-a','--alarm', action='store_true', help='Will set audible alarm if present.') 
-# parser.add_argument('-t','--text', action='store_true', help='Will send text message alert if present.')
-# args = parser.parse_args()
-# if args.lowerLimit != None: tradeAlarmPrice['lowerLimit'] = args.lowerLimit
-# if args.upperLimit != None: tradeAlarmPrice['upperLimit'] = args.upperLimit
-# if args.alarm == True: tradeAlarmPrice['audibleAlarm'] = True
-# if args.text == True: tradeAlarmPrice['textAlarm'] = True
-
-messageCounter=0
+messageCount = 0
 
 class coin:
     def __init__(self, name, groupAmt):
@@ -42,9 +29,8 @@ class coin:
         self.tradeSigFig = groupAmt   # this should be changed into a function that determines the grouping so that there are 5 significant figures for grouping eg, 40000 = 1 , 25 = 0.001 , 3 = 0.0001 , 0.99 = 0.00001
         self.ordBookBuff = []
         self.orderBook = {'bids':[], 'asks':[]}
-        self.trades = {'bought':[[],[]], 'sold':[[],[]]}
+        self.trades = {'bought':{}, 'sold':{}}
         print(f'symbol : {self.symbol} \nstreams: {self.streams}')
-
 
     def updateOrderBook(self, side, update):
         price, quantity = update
@@ -78,56 +64,35 @@ class coin:
         # print('updated orderbook')
         #print(f"updated orderbook \nbids :\n{self.orderBook['bids'][:,25]}\nasks :\n{self.orderBook['asks'][:,25]}")
 
-    def addTrade(self, tradeData, messageCount):
-    # def addTrade(self, tradeData):
-        #print(f"trade data:\n{tradeData}")
+    def addTrade(self, tradeData, messageCount): # 
         # round all trades up to predetermined sigfigs
         price = float(tradeData['p']) - (float(tradeData['p']) % self.tradeSigFig) + self.tradeSigFig
-        # if self.SnapShotRecieved == True:
-        #     print(f"grouped {'sell ' if tradeData['m'] == True else 'buy ' }  trade {messageCount} {tradeData['p']} into  {price} ") # ↓ ↑
         # if buyer is market maker then this trade was a sell
         if tradeData['m'] == True:
-            try:
-                i = self.trades['sold'][0].index(price)
-                self.trades['sold'][1][i] += float(tradeData['q'])
-                #print(f"1 adding {tradeData['q']} to sell price {price}")
-            except:
-                self.trades['sold'][0].append(price)
-                self.trades['sold'][1].append(float(tradeData['q']))
-            #print(self.trades['sold'])
+            print(f'msg: {messageCount} -sell- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["sold"][price] if price in self.trades["sold"] else 0} to get {(self.trades["sold"][price] if price in self.trades["sold"] else 0) + float(tradeData["q"])}')
+            self.trades['sold'].update({price:((self.trades["sold"][price] if price in  self.trades["sold"] else 0) + float(tradeData["q"]))})
         else:
-            try:
-                i = self.trades['bought'][0].index(price)
-                self.trades['bought'][1][i] += float(tradeData['q'])
-                #print(f"3 adding {tradeData['q']} to buy price {price}")
-            except:
-                self.trades['bought'][0].append(price)
-                self.trades['bought'][1].append(float(tradeData['q']))
-    
+            print(f'msg: {messageCount} -buy- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
+            self.trades['bought'].update({price:((self.trades["bought"][price] if price in self.trades["bought"] else 0) + float(tradeData["q"]))})
+
     def setTimeStamp(self, eventTime):
         self.eventTime = eventTime
         print(f"event time set to {eventTime}")
 
     def logData(self):
         filename = 'db/' + str(self.eventTime) + '.txt'
-        # print(f'creating file : {filename}')
-        # file = open(filename, 'w')
-        #file.write('trades:\n')
+        # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
+        toLog = self.trades
+        self.trades = {'bought':{}, 'sold':{}}
         with open(filename, 'w') as file:
             print('trades:\nbought:', file=file)
             #print(self.trades, file=file)
-
-            # for sales in self.trades['bought']:
-            #     print(sales, file=file)
-            # print('sold:', file=file)
-            # for sales in self.trades['sold']:
-            #     print(sales, file=file)
-
-            for sales in list(map(list, zip(*self.trades['bought']))):
-                print(sales, file=file)
+            
+            for price, amount in toLog['bought'].items(): #self.trades['bought'].items()
+                print(f"['{price}' , '{amount}']", file=file)
             print('sold:', file=file)
-            for sales in list(map(list, zip(*self.trades['sold']))):
-                print(sales, file=file)
+            for price, amount in toLog['sold'].items():   # self.trades['sold'].items()
+                print(f"['{price}' , '{amount}']", file=file)
 
             print('\norderbook:\nbids:', file=file)
             #print(self.orderBook, file=file)
@@ -136,13 +101,8 @@ class coin:
             print('asks:', file=file)
             for ords in self.orderBook['asks']:
                 print(ords, file=file)
-            
-
-        #file.write('\norderbook:\n')
-        #file.close()
 
     #-------------------------------------
-
     '''Per the API () 
     listen to orderbook updates and log them, after a small delay get a snapshot of the current orderbook 
     and remove any updates that happened before the snapshot was taken and then apply any updates/messages
@@ -194,33 +154,13 @@ class coin:
             print('Reason : '+ orderBookEncoded.reason)
             #return None
 
-    # need this for storage 
-    # currently we have 2 lists in bought/sold one with price and other quantity and index relates them this makes searching for and adding to a price easier/quicker but for storing we need to transpose into a list of [price, quantity] lists
-    # def transpose(self, lst):
-    #     transposed = list(map(list, zip(*lst)))
-    #     return transposed
-    # and this sorts the array/list self.orderBook[side] = sorted(self.orderBook[side], reverse=True)
-
-
-
-# def priceAlarm(price):
-#     if (price <= tradeAlarmPrice['lowerLimit'] or price >= tradeAlarmPrice['upperLimit']) and (tradeAlarmPrice['lastAlarm']==None or tradeAlarmPrice['lastAlarm']+420 < time.time()):
-#       tradeAlarmPrice['lastAlarm'] = time.time() #reset last time we played an alarm
-#       f="alarm-sound.mp3"
-#       os.system(f)
-
-# {"stream":"btcusdt@depth@1000ms","data":{"e
 def on_message(ws, message, SecuritiesRef):
-    global messageCounter
+    global messageCount
     messaged = json.loads(message)
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
-    # print(f"message recieved for coin: {getattr(CoinObj, coin)}")
-    # print(f"message recieved for coin: {getattr(CoinObj, 'coin')}")
     if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
-        messageCounter=0
-        # print(f"orderbook update for {getattr(CoinObj, 'coin')} ") #{getattr(CoinObj, 'SnapShotRecieved')}
+        messageCount = 0
         if CoinObj.SnapShotRecieved == False:
-            #print('not received')
             CoinObj.ordBookBuff.append(messaged['data'])
             print('appending message to buffer')
         else:
@@ -231,16 +171,12 @@ def on_message(ws, message, SecuritiesRef):
             for eachUpdate in messaged['data']['a']:
                 CoinObj.updateOrderBook('asks', eachUpdate)
             CoinObj.logData()
-    #elif messaged['stream'] == 'btcusdt@aggTrade':
     elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
-        messageCounter+=1
         #print(f"Trade occured for {getattr(CoinObj, 'coin')} - trades since orderbook update: {messageCounter}")
-        CoinObj.addTrade(messaged['data'], messageCounter)
-        # priceAlarm(messaged['data']['p'])
-    else:      #the catch all statement that lets us know we dun fucked up
-        print('You fucked something up.')
-
-
+        messageCount += 1
+        CoinObj.addTrade(messaged['data'], messageCount)
+    else:      #the catch all statement
+        print('Incoming message being handled incorrectly.')
 
 def on_error(ws, error):
     print(error)
@@ -251,23 +187,18 @@ def on_close(ws):
 def on_open(ws, url):
     print(f'opened connection to : {url} \n')
 
-
 def main():
     # websocket.enableTrace(True) # <-- for debugging websocket library/stream
 
     # instantiating objects for various securities
-    btc = coin("BTC", 1)
-    # ada = coin("ADA"); eth = coin("ETH"); dot = coin("DOT", 0.001)
+    btc = coin("BTC", 1)  # ada = coin("ADA"); eth = coin("ETH"); dot = coin("DOT", 0.001)
 
-    # list of objects that will be used to create the base uri endpoint and subscribe to thei relative streams
-    # Securities = {'btc':btc, 'ada':ada, 'eth':eth, 'dot':dot}
+    # list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
+    # Securities = {'btc':btc, 'ada':ada, 'eth':eth, 'dot':dot} # Securities = {'dot':dot}
     Securities = {'btc':btc}
-    #Securities = {'dot':dot}
-
     # genertate the base url
     uriEndpoint = "wss://stream.binance.com:9443"
-    streams = []    # streams = ('btcusdt@aggTrade','btcusdt@depth@100ms',)
-
+    streams = []    # streams = ('btcusdt@aggTrade','btcusdt@depth@100ms',) 
     for coinobjects in Securities.values():
         for points in coinobjects.streams:
             streams.append(points)
@@ -280,9 +211,6 @@ def main():
             if index-1 < len(streams)-2:
                 uriEndpoint += '/'
     print(f"uri endpoint : {uriEndpoint}")
-
-    # debug
-    messageCounter = 0
 
     ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
@@ -302,3 +230,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # transpose a list of lists : transposed = list(map(list, zip(*lst)))
