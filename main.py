@@ -1,4 +1,5 @@
 import numpy as np
+from numpy.typing import _128Bit
 from requests.api import get
 from websocket import WebSocketApp
 from functools import partial
@@ -19,11 +20,11 @@ class coin:
         self.eventTime = 0
         self.tradeSigFig = groupAmt   # this should be changed into a function that determines the grouping so that there are 5 significant figures for grouping eg, 40000 = 1 , 25 = 0.001 , 3 = 0.0001 , 0.99 = 0.00001
         self.ordBookBuff = []
-        self.orderBook = {'bids':[], 'asks':[]}
+        self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}}
         print(f'symbol : {self.symbol} \nstreams: {self.streams}')
 
-    def updateOrderBook(self, side, update):
+    def updateOrderBookLst(self, side, update):
         price, quantity = update
         # price exists: remove or update local order
         for i in range(0, len(self.orderBook[side])):
@@ -54,6 +55,27 @@ class coin:
                 self.orderBook[side].pop(len(self.orderBook[side]) - 1)
         # print('updated orderbook')
         #print(f"updated orderbook \nbids :\n{self.orderBook['bids'][:,25]}\nasks :\n{self.orderBook['asks'][:,25]}")
+    
+    def updateOrderBook(self, message):
+        for side in ['a','b']:
+            bookSide = 'bids' if side == 'b' else 'asks'
+            counter = 0
+            for update in message[side]:
+                counter += 1
+                if float(update[1]) == 0:
+                    #we need a try clause here as documentation states "Receiving an event that removes a price level that is not in your local order book can happen and is normal." which can cause issues
+                    try:
+                        del self.orderBook[bookSide][float(update[0])]
+                    except:
+                        pass
+                else:
+                    self.orderBook[bookSide].update({float(update[0]): float(update[1])})
+        # not entirely sure why but it seems when the orderbook grows bigger than 1000 on either side we need to remove the highest ask and lowest bid in order to keep orders from one side flowing into the other
+            counter = 0
+            while len(self.orderBook[bookSide]) > 1000:
+                counter += 1
+                print(f"-------------- {bookSide} side of orderbok is {len(self.orderBook[bookSide])} long - deleteing {counter} --------------------")
+                del self.orderBook[bookSide][(min(self.orderBook['bids'], key=self.orderBook['bids'].get)) if side == 'b' else (max(self.orderBook['asks'], key=self.orderBook['asks'].get))]
 
     def addTrade(self, tradeData): # 
         # round all trades up to predetermined sigfigs
@@ -84,14 +106,14 @@ class coin:
             print('sold:', file=file)
             for price, amount in toLog['sold'].items():   # self.trades['sold'].items()
                 print(f"['{price}' , '{amount}']", file=file)
-
             print('\norderbook:\nbids:', file=file)
-            #print(self.orderBook, file=file)
-            for ords in self.orderBook['bids']:
-                print(ords, file=file)
+            for price, amount in self.orderBook['bids'].items(): #self.trades['bought'].items()
+                print(f"['{price}' , '{amount}']", file=file)
             print('asks:', file=file)
-            for ords in self.orderBook['asks']:
-                print(ords, file=file)
+            for price, amount in self.orderBook['asks'].items():   # self.trades['sold'].items()
+                print(f"['{price}' , '{amount}']", file=file)
+            # and here the entire thing would be JSON encoded and logged - need to figure out it orderbook and trades are a dictionary or tuple/list or some variant there of
+            print(json.dumps({'trades': self.trades, 'orderbook': self.orderBook}), file=file)
 
     #-------------------------------------
     '''Per the API () 
@@ -112,10 +134,7 @@ class coin:
             for eachUpdate in self.ordBookBuff:
                 print(f" performing update # {updateInd + 1}")
                 last_uID = eachUpdate['u']
-                for eachBid in eachUpdate['b']:
-                    self.updateOrderBook('bids', eachBid)
-                for eachAsk in eachUpdate['a']:
-                    self.updateOrderBook('asks', eachAsk)
+                self.updateOrderBook(eachUpdate)
             self.ordBookBuff = []
         else:
             print("nothing left in buffer - taking next available message frame \n")
@@ -134,7 +153,10 @@ class coin:
             print(f'\nSuccesfully retreived order book!\n') 
             #dictOrderBook = {'bids':  rawOrderBook['bids'],'asks': rawOrderBook['asks']}
             #get rid of all updates to order book in our orberbook changes buffer that occured before we got our snapshot
-            self.orderBook.update(bids = rawOrderBook['bids'], asks = rawOrderBook['asks'])
+            for orders in rawOrderBook['bids']:
+                self.orderBook['bids'].update({float(orders[0]): float(orders[1])})
+            for orders in rawOrderBook['asks']:
+                self.orderBook['asks'].update({float(orders[0]): float(orders[1])})
             self.last_uID = rawOrderBook['lastUpdateId']
             self.SnapShotRecieved = True
             self.bufferCleanup()
@@ -155,10 +177,8 @@ def on_message(ws, message, SecuritiesRef):
         else:
             print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']}")
             CoinObj.setTimeStamp(messaged['data']['E'])
-            for eachUpdate in messaged['data']['b']:
-                CoinObj.updateOrderBook('bids', eachUpdate)
-            for eachUpdate in messaged['data']['a']:
-                CoinObj.updateOrderBook('asks', eachUpdate)
+            CoinObj.updateOrderBook(messaged['data'])
+            # CoinObj.updateOrderBook(messaged['data']['a'], messaged['data']['b'])
             CoinObj.logData()
     elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
         CoinObj.addTrade(messaged['data'])
