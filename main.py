@@ -93,12 +93,11 @@ class coin:
             for ords in self.orderBook['asks']:
                 print(ords, file=file)
 
-    #-------------------------------------
-    '''Per the API () 
-    listen to orderbook updates and log them, after a small delay get a snapshot of the current orderbook 
-    and remove any updates that happened before the snapshot was taken and then apply any updates/messages
-    that occured after the snapshot '''
     def bufferCleanup(self):
+        '''Per the API () 
+        listen to orderbook updates and log them, after a small delay get a snapshot of the current orderbook 
+        and remove any updates that happened before the snapshot was taken and then apply any updates/messages
+        that occured after the snapshot '''
         while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
             print(f"deleting - eventtime: {self.ordBookBuff[0]['E']}  -  U ID : {self.ordBookBuff[0]['U']}   -   u ID : {self.ordBookBuff[0]['u']}")
             del self.ordBookBuff[0]
