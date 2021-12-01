@@ -22,39 +22,7 @@ class coin:
         self.ordBookBuff = []
         self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}}
-        print(f'symbol : {self.symbol} \nstreams: {self.streams}')
-
-    def updateOrderBookLst(self, side, update):
-        price, quantity = update
-        # price exists: remove or update local order
-        for i in range(0, len(self.orderBook[side])):
-            if price == self.orderBook[side][i][0]:
-                # quantity is 0: remove
-                if float(quantity) == 0:
-                    # print('removing from orderbook')
-                    #we need a try clause here as documentation states "Receiving an event that removes a price level that is not in your local order book can happen and is normal." which can cause issues
-                    try:
-                        self.orderBook[side].pop(i)
-                    except:
-                        pass
-                    return
-                else:
-                    # quantity is not 0: update the order with new quantity
-                    # print('updating orderbook')
-                    self.orderBook[side][i] = update
-                    return
-        # price not found: add new order
-        if float(quantity) != 0:
-            self.orderBook[side].append(update)
-            if side == 'asks':
-                self.orderBook[side] = sorted(self.orderBook[side])  # asks prices in ascendant order
-            else:
-                self.orderBook[side] = sorted(self.orderBook[side], reverse=True)  # bids prices in descendant order
-            # maintain side depth <= 1000
-            if len(self.orderBook[side]) > 1000:
-                self.orderBook[side].pop(len(self.orderBook[side]) - 1)
-        # print('updated orderbook')
-        #print(f"updated orderbook \nbids :\n{self.orderBook['bids'][:,25]}\nasks :\n{self.orderBook['asks'][:,25]}")
+        # print(f'symbol : {self.symbol} \nstreams: {self.streams}')
     
     def updateOrderBook(self, message):
         for side in ['a','b']:
@@ -74,7 +42,7 @@ class coin:
             counter = 0
             while len(self.orderBook[bookSide]) > 1000:
                 counter += 1
-                print(f"-------------- {bookSide} side of orderbok is {len(self.orderBook[bookSide])} long - deleteing {counter} --------------------")
+                # print(f"-------------- {bookSide} side of orderbok is {len(self.orderBook[bookSide])} long - deleteing {counter} --------------------")
                 del self.orderBook[bookSide][(min(self.orderBook['bids'], key=self.orderBook['bids'].get)) if side == 'b' else (max(self.orderBook['asks'], key=self.orderBook['asks'].get))]
 
     def addTrade(self, tradeData): # 
@@ -98,9 +66,7 @@ class coin:
         toLog = self.trades
         self.trades = {'bought':{}, 'sold':{}}
         with open(filename, 'w') as file:
-            print('trades:\nbought:', file=file)
-            #print(self.trades, file=file)
-            
+            print('trades:\nbought:', file=file)            
             for price, amount in toLog['bought'].items(): #self.trades['bought'].items()
                 print(f"['{price}' , '{amount}']", file=file)
             print('sold:', file=file)
@@ -132,7 +98,7 @@ class coin:
             updateInd = 0
             for eachUpdate in self.ordBookBuff:
                 print(f" performing update # {updateInd + 1}")
-                last_uID = eachUpdate['u']
+                self.last_uID = eachUpdate['u']
                 self.updateOrderBook(eachUpdate)
             self.ordBookBuff = []
         else:
@@ -150,7 +116,6 @@ class coin:
         if orderBookEncoded.ok: #process it if we get a response of ok=200
             rawOrderBook = orderBookEncoded.json() #returns a dataframe ----also has code to return lists of dictionaries with bids and prices
             print(f'\nSuccesfully retreived order book!\n') 
-            #dictOrderBook = {'bids':  rawOrderBook['bids'],'asks': rawOrderBook['asks']}
             #get rid of all updates to order book in our orberbook changes buffer that occured before we got our snapshot
             for orders in rawOrderBook['bids']:
                 self.orderBook['bids'].update({float(orders[0]): float(orders[1])})
@@ -159,12 +124,10 @@ class coin:
             self.last_uID = rawOrderBook['lastUpdateId']
             self.SnapShotRecieved = True
             self.bufferCleanup()
-            #return {"orderBook" : {'bids':  rawOrderBook['bids'],'asks': rawOrderBook['asks']}, "uID" : rawOrderBook['lastUpdateId']}
         else:
             print('Error retieving order book.') #RESTfull request failed 
             print('Status code : '+ str(orderBookEncoded.status_code))
             print('Reason : '+ orderBookEncoded.reason)
-            #return None
 
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
@@ -177,7 +140,6 @@ def on_message(ws, message, SecuritiesRef):
             print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']}")
             CoinObj.setTimeStamp(messaged['data']['E'])
             CoinObj.updateOrderBook(messaged['data'])
-            # CoinObj.updateOrderBook(messaged['data']['a'], messaged['data']['b'])
             CoinObj.logData()
     elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
         CoinObj.addTrade(messaged['data'])
@@ -195,10 +157,8 @@ def on_open(ws, url):
 
 def main():
     # websocket.enableTrace(True) # <-- for debugging websocket library/stream
-
     # instantiating objects for various securities
     btc = coin("BTC", 1)  # ada = coin("ADA"); eth = coin("ETH"); dot = coin("DOT", 0.001)
-
     # list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
     # Securities = {'btc':btc, 'ada':ada, 'eth':eth, 'dot':dot} # Securities = {'dot':dot}
     Securities = {'btc':btc}
@@ -223,17 +183,14 @@ def main():
     listeningForMessages.start()
     #need to allow buffer to fill up alittle in order to get snapshot and then apply correct updates/mesages to orderbook as per API documentation
     time.sleep(2)
-
     for coinObjects in Securities.values():
         coinObjects.getOrderBookSnapshot()
-
+    # we basically wait here until we press esc
     keyboard.wait('esc')
-
     ws.close()
     listeningForMessages.join()
-    print(f"active threads (should be 1) : {threading.active_count()}")
+    print(f"active threads (should be 1) : {threading.active_count()}") #
     exit(0)
 
 if __name__ == "__main__":
     main()
-    # transpose a list of lists : transposed = list(map(list, zip(*lst)))
