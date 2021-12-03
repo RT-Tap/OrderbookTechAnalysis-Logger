@@ -1,5 +1,4 @@
 import numpy as np
-from numpy.typing import _128Bit
 from requests.api import get
 from websocket import WebSocketApp
 from functools import partial
@@ -8,7 +7,6 @@ import threading
 import time
 import fnmatch # needed for string wildcard matching
 import keyboard
-
 
 class coin:
     def __init__(self, name, groupAmt):
@@ -25,6 +23,14 @@ class coin:
         # print(f'symbol : {self.symbol} \nstreams: {self.streams}')
     
     def updateOrderBook(self, message):
+        if message['U'] > self.last_uID + 1:
+            print(f"ERROR {self.symbol} updateID for {message['E']} was not what was expected - last_uID logged: {self.last_uID} | uID (first event) of this message : {message['U']} - difference : {float(message['U']) - self.last_uID}")
+            self.SnapShotRecieved = False
+            self.orderBook = {'bids':{}, 'asks':{}}
+            time.sleep(2)
+            self.getOrderBookSnapshot()
+        self.eventTime = message['E']
+        self.last_uID = message['u']
         for side in ['a','b']:
             bookSide = 'bids' if side == 'b' else 'asks'
             counter = 0
@@ -42,67 +48,44 @@ class coin:
             counter = 0
             while len(self.orderBook[bookSide]) > 1000:
                 counter += 1
-                # print(f"-------------- {bookSide} side of orderbok is {len(self.orderBook[bookSide])} long - deleteing {counter} --------------------")
+                # print(f"{counter} - deleting {bookSide} side of orderbok which contained {min(self.orderBook['bids'], key=self.orderBook['bids'].get) if side == 'b' else max(self.orderBook['asks'], key=self.orderBook['asks'].get)}")
                 del self.orderBook[bookSide][(min(self.orderBook['bids'], key=self.orderBook['bids'].get)) if side == 'b' else (max(self.orderBook['asks'], key=self.orderBook['asks'].get))]
+        if max(self.orderBook['bids'], key=self.orderBook['bids'].get) > min(self.orderBook['asks'], key=self.orderBook['asks'].get) :
+            print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!ERROR!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+            print(f"max bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}")
+        self.logData()
 
     def addTrade(self, tradeData): # 
         # round all trades up to predetermined sigfigs
         price = float(tradeData['p']) - (float(tradeData['p']) % self.tradeSigFig) + self.tradeSigFig
         # if buyer is market maker then this trade was a sell
         if tradeData['m'] == True:
-            print(f'-sell- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["sold"][price] if price in self.trades["sold"] else 0} to get {(self.trades["sold"][price] if price in self.trades["sold"] else 0) + float(tradeData["q"])}')
+            # print(f'-{self.coin} sell- {tradeData["E"]} - {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["sold"][price] if price in self.trades["sold"] else 0} to get {(self.trades["sold"][price] if price in self.trades["sold"] else 0) + float(tradeData["q"])}')
             self.trades['sold'].update({price:((self.trades["sold"][price] if price in  self.trades["sold"] else 0) + float(tradeData["q"]))})
         else:
-            print(f'-buy- {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
+            # print(f'-{self.coin} buy- {tradeData["E"]} - {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
             self.trades['bought'].update({price:((self.trades["bought"][price] if price in self.trades["bought"] else 0) + float(tradeData["q"]))})
 
-    def setTimeStamp(self, eventTime):
-        self.eventTime = eventTime
-        print(f"event time set to {eventTime}")
-
     def logData(self):
-        filename = 'db/' + str(self.eventTime) + '.txt'
+        filename = 'db/' + self.coin + str(self.eventTime) + '.txt'
         # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
-        toLog = self.trades
-        self.trades = {'bought':{}, 'sold':{}}
         with open(filename, 'w') as file:
             print('trades:\nbought:', file=file)            
-            for price, amount in toLog['bought'].items(): #self.trades['bought'].items()
-                print(f"['{price}' , '{amount}']", file=file)
+            for price, amount in self.trades['bought'].items() : #self.trades['bought'].items()   # toLog['bought'].items()
+                print(f"{price} : {amount}", file=file)
             print('sold:', file=file)
-            for price, amount in toLog['sold'].items():   # self.trades['sold'].items()
-                print(f"['{price}' , '{amount}']", file=file)
+            for price, amount in self.trades['bought'].items() :   
+                print(f"{price} : {amount}", file=file)
             print('\norderbook:\nbids:', file=file)
             for price, amount in self.orderBook['bids'].items(): #self.trades['bought'].items()
-                print(f"['{price}' , '{amount}']", file=file)
+                print(f"{price} : {amount}", file=file)
             print('asks:', file=file)
-            for price, amount in self.orderBook['asks'].items():   # self.trades['sold'].items()
-                print(f"['{price}' , '{amount}']", file=file)
+            for price, amount in self.orderBook['asks'].items():  
+                print(f"{price} : {amount}", file=file)
             # and here the entire thing would be JSON encoded and logged - need to figure out it orderbook and trades are a dictionary or tuple/list or some variant there of
             print(json.dumps({'trades': self.trades, 'orderbook': self.orderBook}), file=file)
+        self.trades = {'bought':{}, 'sold':{}}
 
-    def bufferCleanup(self):
-        '''Per the API () 
-        listen to orderbook updates and log them, after a small delay get a snapshot of the current orderbook 
-        and remove any updates that happened before the snapshot was taken and then apply any updates/messages
-        that occured after the snapshot '''
-        while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
-            print(f"deleting - eventtime: {self.ordBookBuff[0]['E']}  -  U ID : {self.ordBookBuff[0]['U']}   -   u ID : {self.ordBookBuff[0]['u']}")
-            del self.ordBookBuff[0]
-            if len(self.ordBookBuff) == 0:
-                break
-        print(f"new length : {len(self.ordBookBuff)} \n")
-        if len(self.ordBookBuff) >= 1 :
-            print(f"first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']}")
-            print(f" buffer size : {len(self.ordBookBuff)}")
-            updateInd = 0
-            for eachUpdate in self.ordBookBuff:
-                print(f" performing update # {updateInd + 1}")
-                self.last_uID = eachUpdate['u']
-                self.updateOrderBook(eachUpdate)
-            self.ordBookBuff = []
-        else:
-            print("nothing left in buffer - taking next available message frame \n")
     
     def getOrderBookSnapshot(self):
         API_endpoint = 'https://api.binance.com'  # url of api server
@@ -115,15 +98,35 @@ class coin:
         orderBookEncoded = get(orderBookURL) #import requests   then this line becomes request.get(orderBookURL)
         if orderBookEncoded.ok: #process it if we get a response of ok=200
             rawOrderBook = orderBookEncoded.json() #returns a dataframe ----also has code to return lists of dictionaries with bids and prices
-            print(f'\nSuccesfully retreived order book!\n') 
-            #get rid of all updates to order book in our orberbook changes buffer that occured before we got our snapshot
-            for orders in rawOrderBook['bids']:
-                self.orderBook['bids'].update({float(orders[0]): float(orders[1])})
-            for orders in rawOrderBook['asks']:
-                self.orderBook['asks'].update({float(orders[0]): float(orders[1])})
-            self.last_uID = rawOrderBook['lastUpdateId']
-            self.SnapShotRecieved = True
-            self.bufferCleanup()
+            print(f'\nSuccesfully retreived order book for  {self.symbol}!\n')
+            # we dont really want any incoming orderbook updates to interrupt (re)setting the orderbook so we lock the thread for this portion
+            with threading.Lock():
+                #get rid of all updates to order book in our orberbook changes buffer that occured before we got our snapshot
+                for orders in rawOrderBook['bids']:
+                    self.orderBook['bids'].update({float(orders[0]): float(orders[1])})
+                for orders in rawOrderBook['asks']:
+                    self.orderBook['asks'].update({float(orders[0]): float(orders[1])})
+                self.last_uID = rawOrderBook['lastUpdateId']
+                self.SnapShotRecieved = True
+                #----update buffer section-------- may need to be broken back out if we decide to make all coins orderbook requests in one api call
+                while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
+                    print(f"deleting - eventtime: {self.ordBookBuff[0]['E']}  -  U ID : {self.ordBookBuff[0]['U']}   -   u ID : {self.ordBookBuff[0]['u']}")
+                    del self.ordBookBuff[0]
+                    if len(self.ordBookBuff) == 0:
+                        break
+                print(f"new length : {len(self.ordBookBuff)} \n")
+                if len(self.ordBookBuff) >= 1 :
+                    print(f"first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']}")
+                    print(f" buffer size : {len(self.ordBookBuff)}")
+                    updateInd = 0
+                    for eachUpdate in self.ordBookBuff:
+                        print(f" performing update for # {updateInd + 1} for {self.symbol}")
+                        self.last_uID = eachUpdate['u']
+                        self.updateOrderBook(eachUpdate)
+                    self.ordBookBuff = []
+                else:
+                    print("nothing left in buffer - taking next available message frame \n")
+                #------------------------------
         else:
             print('Error retieving order book.') #RESTfull request failed 
             print('Status code : '+ str(orderBookEncoded.status_code))
@@ -131,18 +134,17 @@ class coin:
 
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
+    #print(messaged)
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
     if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
         if CoinObj.SnapShotRecieved == False:
             CoinObj.ordBookBuff.append(messaged['data'])
             print('appending message to buffer')
         else:
-            print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']}")
-            CoinObj.setTimeStamp(messaged['data']['E'])
+            print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']} - last recorded ID {CoinObj.last_uID} - message: first UID: {messaged['data']['U']}  last uID : {messaged['data']['u']} ")
             CoinObj.updateOrderBook(messaged['data'])
-            CoinObj.logData()
     elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
-        CoinObj.addTrade(messaged['data'])
+        CoinObj.addTrade(messaged['data']) #, messaged['E']
     else:      #the catch all statement
         print('Incoming message being handled incorrectly.')
 
@@ -156,15 +158,11 @@ def on_open(ws, url):
     print(f'opened connection to : {url} \n')
 
 def main():
-    # websocket.enableTrace(True) # <-- for debugging websocket library/stream
-    # instantiating objects for various securities
-    btc = coin("BTC", 1)  # ada = coin("ADA"); eth = coin("ETH"); dot = coin("DOT", 0.001)
-    # list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
-    # Securities = {'btc':btc, 'ada':ada, 'eth':eth, 'dot':dot} # Securities = {'dot':dot}
-    Securities = {'btc':btc}
-    # genertate the base url
+    # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
+    Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    # genertate the base url from list of objects/securities
     uriEndpoint = "wss://stream.binance.com:9443"
-    streams = []    # streams = ('btcusdt@aggTrade','btcusdt@depth@100ms',) 
+    streams = []
     for coinobjects in Securities.values():
         for points in coinobjects.streams:
             streams.append(points)
@@ -189,7 +187,6 @@ def main():
     keyboard.wait('esc')
     ws.close()
     listeningForMessages.join()
-    print(f"active threads (should be 1) : {threading.active_count()}") #
     exit(0)
 
 if __name__ == "__main__":
