@@ -7,9 +7,12 @@ import threading
 import time
 import fnmatch # needed for string wildcard matching
 import keyboard
+from pymongo import MongoClient
+from pprint import pprint
+
 
 class coin:
-    def __init__(self, name, groupAmt):
+    def __init__(self, name, groupAmt, DBConn):
         self.coin = name.lower()
         self.symbol = name.lower() + "usdt"
         self.streams = [self.symbol + "@aggTrade", self.symbol + "@depth@1000ms"]
@@ -20,7 +23,10 @@ class coin:
         self.ordBookBuff = []
         self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}}
+        self.DBConn = DBConn[self.symbol]
         # print(f'symbol : {self.symbol} \nstreams: {self.streams}')
+        # time.sleep(2)
+        # self.getOrderBookSnapshot()
     
     def updateOrderBook(self, message):
         if message['U'] > self.last_uID + 1:
@@ -70,22 +76,29 @@ class coin:
         filename = 'db/' + self.coin + str(self.eventTime) + '.txt'
         # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
         with open(filename, 'w') as file:
-            print('trades:\nbought:', file=file)            
-            for price, amount in self.trades['bought'].items() : #self.trades['bought'].items()   # toLog['bought'].items()
-                print(f"{price} : {amount}", file=file)
-            print('sold:', file=file)
-            for price, amount in self.trades['bought'].items() :   
-                print(f"{price} : {amount}", file=file)
-            print('\norderbook:\nbids:', file=file)
-            for price, amount in self.orderBook['bids'].items(): #self.trades['bought'].items()
-                print(f"{price} : {amount}", file=file)
-            print('asks:', file=file)
-            for price, amount in self.orderBook['asks'].items():  
-                print(f"{price} : {amount}", file=file)
+            # print('trades:\nbought:', file=file)            
+            # for price, amount in self.trades['bought'].items() : #self.trades['bought'].items()   # toLog['bought'].items()
+            #     print(f"{price} : {amount}", file=file)
+            # print('sold:', file=file)
+            # for price, amount in self.trades['bought'].items() :   
+            #     print(f"{price} : {amount}", file=file)
+            # print('\norderbook:\nbids:', file=file)
+            # for price, amount in self.orderBook['bids'].items(): #self.trades['bought'].items()
+            #     print(f"{price} : {amount}", file=file)
+            # print('asks:', file=file)
+            # for price, amount in self.orderBook['asks'].items():  
+            #     print(f"{price} : {amount}", file=file)
             # and here the entire thing would be JSON encoded and logged - need to figure out it orderbook and trades are a dictionary or tuple/list or some variant there of
-            print(json.dumps({'trades': self.trades, 'orderbook': self.orderBook}), file=file)
+            print(json.dumps({ "_id" : self.eventTime, 'trades': self.trades, 'orderbook': self.orderBook}), file=file)
         self.trades = {'bought':{}, 'sold':{}}
 
+    def mongolog(self):
+        insertData = { "_id" : self.eventTime, "trades" : self.trades,  "orberbook" : self.orderBook }
+        try:
+            result=self.DBConn.insert_one(insertData)
+            print(f"Inserted : \n {result}")
+        except Exception as e:
+            print(f"Already inserted\Error occured : \n {e}")
     
     def getOrderBookSnapshot(self):
         API_endpoint = 'https://api.binance.com'  # url of api server
@@ -158,8 +171,12 @@ def on_open(ws, url):
     print(f'opened connection to : {url} \n')
 
 def main():
+    # mongoDB connection object which we will use to log to database
+    client = MongoClient('192.168.1.254:27017', username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
+    DBConn = client['orderbook&trades']
+
     # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
-    Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    Securities = {'btc':coin("BTC", 1, DBConn), 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
     # genertate the base url from list of objects/securities
     uriEndpoint = "wss://stream.binance.com:9443"
     streams = []
@@ -176,6 +193,9 @@ def main():
                 uriEndpoint += '/'
     print(f"uri endpoint : {uriEndpoint}")
 
+
+
+    # websocket for handling updates
     ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
