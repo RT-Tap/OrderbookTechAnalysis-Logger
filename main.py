@@ -6,10 +6,21 @@ import json
 import threading
 import time
 import fnmatch # needed for string wildcard matching
-import keyboard
+from keyboard import wait as keyboardwait
 from pymongo import MongoClient
-from pprint import pprint
+from multiprocessing.managers import BaseManager
 
+class RemoteOperations:
+    def add(self, a, b):
+        print('adding in server process!')
+        return a + b
+
+    def multiply(self, a, b):
+        print('multiplying in server process!')
+        return a * b
+
+class RemoteManager(BaseManager):
+    pass
 
 class coin:
     def __init__(self, name, groupAmt, DBConn):
@@ -146,6 +157,7 @@ class coin:
             print('Status code : '+ str(orderBookEncoded.status_code))
             print('Reason : '+ orderBookEncoded.reason)
 
+<<<<<<< HEAD
     def addSelfToStream(self, ws, msgtype):
         # msgtype "sub" for subscribing and "unsub" or anything else for unsubscribing
         message = {"method": "SUBSCRIBE" if msgtype == "sub" else "UNSUBSCRIBE", "params": self.streams, "id": 1 }
@@ -153,6 +165,8 @@ class coin:
         if msgtype == "sub":
             getsnapshot = threading.Thread(target=self.getOrderBookSnapshot, daemon=True)
             getsnapshot.start()
+=======
+>>>>>>> a98d6c6 (inital commit adding skeleton code for multiprocessing)
 
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
@@ -208,22 +222,39 @@ def main():
                 uriEndpoint += '/'
     print(f"uri endpoint : {uriEndpoint}")
 
-
-
     # websocket for handling updates
     ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
+
+    #-------------------------------------------------------------------------------------------------------------------------------
+    # RemoteManager.register('RemoteOperations', RemoteOperations)
+
+    # manager = RemoteManager(address=('', 12345), authkey=b'secret')
+    # manager.get_server().serve_forever()
+    #-----------
+    # threadedmanager = threading.Thread(target=manager.get_server().serve_forever(), daemon=True)
+    # threadedmanager.start()
+    #-------------------------------------------------------------------------------------------------------------------------------
+
     #need to allow buffer to fill up alittle in order to get snapshot and then apply correct updates/mesages to orderbook as per API documentation
     for coinObjects in Securities.values():
         snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
         snapshotthread.start()
         # coinObjects.getOrderBookSnapshot()
     # we basically wait here until we press esc
-    keyboard.wait('esc')
+    keyboardwait('esc')
+    # while True:
+    #     if keyboard.is_pressed('q'):
+    #         break
     ws.close()
     listeningForMessages.join()
     exit(0)
 
 if __name__ == "__main__":
     main()
+    # RemoteManager.register('RemoteOperations', main)
+    # # RemoteManager.register('RemoteOperations', RemoteOperations)
+
+    # manager = RemoteManager(address=('', 12345), authkey=b'secret')
+    # manager.get_server().serve_forever()
