@@ -101,6 +101,7 @@ class coin:
             print(f"Already inserted\Error occured : \n {e}")
     
     def getOrderBookSnapshot(self):
+        time.sleep(2)
         API_endpoint = 'https://api.binance.com'  # url of api server
         getObjectEndpoint = 'api/v3/depth'
         parameterNameSymbol = 'symbol'
@@ -145,21 +146,35 @@ class coin:
             print('Status code : '+ str(orderBookEncoded.status_code))
             print('Reason : '+ orderBookEncoded.reason)
 
+    def addSelfToStream(self, ws, msgtype):
+        # msgtype "sub" for subscribing and "unsub" or anything else for unsubscribing
+        message = {"method": "SUBSCRIBE" if msgtype == "sub" else "UNSUBSCRIBE", "params": self.streams, "id": 1 }
+        ws.send(json.dumps(message))
+        if msgtype == "sub":
+            getsnapshot = threading.Thread(target=self.getOrderBookSnapshot, daemon=True)
+            getsnapshot.start()
+
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
     #print(messaged)
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
-    if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
-        if CoinObj.SnapShotRecieved == False:
-            CoinObj.ordBookBuff.append(messaged['data'])
-            print('appending message to buffer')
-        else:
-            print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']} - last recorded ID {CoinObj.last_uID} - message: first UID: {messaged['data']['U']}  last uID : {messaged['data']['u']} ")
-            CoinObj.updateOrderBook(messaged['data'])
-    elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
-        CoinObj.addTrade(messaged['data']) #, messaged['E']
-    else:      #the catch all statement
-        print('Incoming message being handled incorrectly.')
+    if "stream" in messaged:
+        if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
+            if CoinObj.SnapShotRecieved == False:
+                CoinObj.ordBookBuff.append(messaged['data'])
+                print('appending message to buffer')
+            else:
+                print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']} - last recorded ID {CoinObj.last_uID} - message: first UID: {messaged['data']['U']}  last uID : {messaged['data']['u']} ")
+                CoinObj.updateOrderBook(messaged['data'])
+        elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
+            CoinObj.addTrade(messaged['data']) #, messaged['E']
+        else:      #the catch all statement
+            print('Incoming message being handled incorrectly.')
+    elif "result" in messaged:
+        if messaged['result'] == None:
+            print("Successfully (un)subscribed")
+    else:
+        print("Unexpected message handling")
 
 def on_error(ws, error):
     print(error)
@@ -200,9 +215,10 @@ def main():
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
     #need to allow buffer to fill up alittle in order to get snapshot and then apply correct updates/mesages to orderbook as per API documentation
-    time.sleep(2)
     for coinObjects in Securities.values():
-        coinObjects.getOrderBookSnapshot()
+        snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
+        snapshotthread.start()
+        # coinObjects.getOrderBookSnapshot()
     # we basically wait here until we press esc
     keyboard.wait('esc')
     ws.close()
