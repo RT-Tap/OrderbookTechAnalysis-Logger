@@ -157,7 +157,6 @@ class coin:
             print('Status code : '+ str(orderBookEncoded.status_code))
             print('Reason : '+ orderBookEncoded.reason)
 
-<<<<<<< HEAD
     def addSelfToStream(self, ws, msgtype):
         # msgtype "sub" for subscribing and "unsub" or anything else for unsubscribing
         message = {"method": "SUBSCRIBE" if msgtype == "sub" else "UNSUBSCRIBE", "params": self.streams, "id": 1 }
@@ -165,8 +164,6 @@ class coin:
         if msgtype == "sub":
             getsnapshot = threading.Thread(target=self.getOrderBookSnapshot, daemon=True)
             getsnapshot.start()
-=======
->>>>>>> a98d6c6 (inital commit adding skeleton code for multiprocessing)
 
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
