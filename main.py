@@ -106,6 +106,15 @@ class coin:
         if float(tradeData['p']) * float(tradeData['q']) >= self.significantTradeLimit:
             self.significantTradeEvents.append({float(tradeData['p']): float(tradeData['q'])})
         
+    def messageupdates(self, message):
+        # because it saves space to only log updates rather than the entire orderbook we will turn the updates into a dictionary (because it is easier for us to handle than a list) 
+        # that can then be applied to the orderbook at the previous timestamps condition
+        updatedict = {}
+        for sides in ["a","b"]:
+            for update in message[sides]:
+                updatedict.update({update[0]: float(update[1])})
+        self.mongolog("update", updatedict)
+
 
     def logMessage(self, message, **priority):
         filename = 'db/' + self.coin + str(self.eventTime) + '.txt'
@@ -119,9 +128,9 @@ class coin:
         # print(f"time right now: {dtime} corresponding unix timestamp : {unixtime}")
         # print(f"now backwards- unix timsetamp now: {unixtime} converted : {datetime.utcfromtimestamp(unixtime).strftime('%Y-%m-%d %H:%M:%S')}")
 
-    def mongolog(self):
-        ident =  str(time.mktime(datetime.now().timetuple())*1000)
-        insertData = { "_id" : ident, "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : self.orderBook } # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+    def mongolog(self, messagetype, update):
+        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if messagetype == "orderbooksnapshot" else "update")
+        insertData = { "_id" : ident, "type": "snapshot" if messagetype == "orderbooksnapshot" else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : self.orderBook if messagetype == "orderbooksnapshot" else update} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
         if len(self.significantTradeEvents) != 0:
             insertData.update({'significantTradeEvents': self.significantTradeEvents})
         try:
@@ -194,12 +203,16 @@ def on_message(ws, message, SecuritiesRef):
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
     if "stream" in messaged:
         if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
+            # although it should be possbile to recieve an update within the time period between orderbook updates from websocket stream best practice is to log any messages as well
             if CoinObj.SnapShotRecieved == False:
                 CoinObj.ordBookBuff.append(messaged['data'])
                 print('appending message to buffer')
             else:
                 print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']} - last recorded ID {CoinObj.last_uID} - message: first UID: {messaged['data']['U']}  last uID : {messaged['data']['u']} ")
+                # we will keep an up to date orderbook locally 
                 CoinObj.updateOrderBook(messaged['data'])
+                # it is more "efficient" or rather we can save a lot of disk space by only logging changes to the orderbook so we take the message data and send it to be conditioned and logged
+                CoinObj.messageupdates(messaged['data'])
         elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
             CoinObj.addTrade(messaged['data']) #, messaged['E']
         else:      #the catch all statement
