@@ -128,7 +128,7 @@ class coin:
         # print(f"time right now: {dtime} corresponding unix timestamp : {unixtime}")
         # print(f"now backwards- unix timsetamp now: {unixtime} converted : {datetime.utcfromtimestamp(unixtime).strftime('%Y-%m-%d %H:%M:%S')}")
 
-    def mongolog(self, messagetype, update):
+    def mongolog(self, messagetype, *update):
         ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if messagetype == "orderbooksnapshot" else "update")
         insertData = { "_id" : ident, "type": "snapshot" if messagetype == "orderbooksnapshot" else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : self.orderBook if messagetype == "orderbooksnapshot" else update} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
         if len(self.significantTradeEvents) != 0:
@@ -163,6 +163,15 @@ class coin:
                 for orders in rawOrderBook['asks']:
                     self.orderBook['asks'].update({float(orders[0]): float(orders[1])})
                 self.last_uID = rawOrderBook['lastUpdateId']
+                # we are getting 5000 long snapshot however websocket only updates top 1000 so we need to shorten it for storing local copy/processing
+                # therefore we log the full 5000 long orderbook then shorten it down
+                self.mongolog('orderbooksnapshot')
+                pricelist = {'asks':  sorted(list(self.orderBook['asks'].keys())), 'bids': sorted(list(self.orderBook['bids'].keys()), reverse=True)}
+                pricelist['asks'] = pricelist['asks'][1000:]
+                pricelist['bids'] = pricelist['bids'][1000:]
+                for side in ['asks', 'bids']:
+                    for price in pricelist[side]:
+                        del self.orderBook[side][price]
                 #----update from buffer section-------- 
                 # This section more than likely is only necessary for 100ms update stream - 1000ms = 1 sec and we can request and receive a snapshot within 1 sec comfortably
                 # 100ms on the otherhand may cause some issues because we may have recieved an update to the snapshot that is newer than what is in the snapshot and if we dont't apply 
