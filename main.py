@@ -1,3 +1,4 @@
+import keyboard
 import numpy as np
 from requests.api import get
 from websocket import WebSocketApp
@@ -21,19 +22,28 @@ class RemoteOperations:
         self.messageServer = messageServer
         self.DBConn = DBConn
 
-    def addsecurity(self, newcoin, groupAmt, *pair):
-        self.securities[newcoin] = coin(newcoin, groupAmt, self.DBConn)
-
-    def test(self):
-        print("Self test")
-        rtnlist = []
-        for items in self.securities.values():
-            rtnlist.append(items.symbol)
-        return {"websocket": type(self.websocketConnection), "coins": rtnlist}
+    def addSecurity(self, newcoin, groupAmt, *pair):
+        print(f"\nTrying to add {newcoin}\n")
+        self.securities[newcoin.lower()] = coin(newcoin.upper(), groupAmt, self.DBConn)
+        self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
+        return "Remote - Success?"
+    
+    def removeSecurity(self, symbol):
+        self.securities[symbol].snapshotTimerError.set()
+        self.securities[symbol].removeSelfFromStream(self.websocketConnection)
+        del self.securities[symbol]
+        return "Remote - Success?"
+    
+    def getorderbook(self, symbol):
+        print(f"User requested new/updated orderbook snapshot for {symbol}")
+        self.securities[symbol.lower()].snapshotTimerError.set()
     
     def terminate(self):
         print("Remote terminate command received")
         self.messageServer.stop_event.set()
+
+    def test(self, gimme):
+        print(f"This is a test! --> {gimme}")
 
 class coin:
     def __init__(self, name, groupAmt, DBConn, sigTradeLim=10000):
@@ -57,7 +67,7 @@ class coin:
         # time.sleep(2)
         # self.getOrderBookSnapshot()
         self.significantTradeLimit = sigTradeLim
-        self.significantTradeEvents = [] 
+        self.significantTradeEvents = []
         # we want to grab an orderbook snapshot every x seconds (30 min) unless a message error occurs (e.g. an incoming update has an unexpected updateID indicating we missed an update message)
         #  therefore we have a thread that just waits for the timer to run out or the event to be set and requests another snapshot
         self.snapshotTimerError = threading.Event()
@@ -95,7 +105,7 @@ class coin:
             errormesg = f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}"
             self.logMessage(errormesg, priority=2)
             self.snapshotTimerError.set()
-        self.mongolog()
+        #self.mongolog()
 
     def addTrade(self, tradeData): # 
         # round all trades up to predetermined sigfigs
@@ -108,15 +118,15 @@ class coin:
             # print(f'-{self.coin} buy- {tradeData["E"]} - {tradeData["p"]} is updating {price} by adding {tradeData["q"]} to {self.trades["bought"][price] if price in  self.trades["bought"] else 0} to get {(self.trades["bought"][price] if price in  self.trades["bought"] else 0) + float(tradeData["q"])}')
             self.trades['bought'].update({price:((self.trades["bought"][price] if price in self.trades["bought"] else 0) + float(tradeData["q"]))})
         if float(tradeData['p']) * float(tradeData['q']) >= self.significantTradeLimit:
-            self.significantTradeEvents.append({float(tradeData['p']): float(tradeData['q'])})
+            self.significantTradeEvents.update([str(tradeData['p']), float(tradeData['q'])])
         
     def messageupdates(self, message):
         # because it saves space to only log updates rather than the entire orderbook we will turn the updates into a dictionary (because it is easier for us to handle than a list) 
         # that can then be applied to the orderbook at the previous timestamps condition
-        updatedict = {}
-        for sides in ["a","b"]:
-            for update in message[sides]:
-                updatedict.update({update[0]: float(update[1])})
+        updatedict = {"asks":{}, "bids":{}}
+        for msgkey, logkey in {"a":"asks","b":"bids"}.items():
+            for updates in message[msgkey]:
+                updatedict[logkey].update({updates[0]: float(updates[1])})
         self.mongolog("update", updatedict)
 
 
@@ -134,25 +144,40 @@ class coin:
 
     def mongolog(self, messagetype, *update):
         ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if messagetype == "orderbooksnapshot" else "update")
-        insertData = { "_id" : ident, "type": "snapshot" if messagetype == "orderbooksnapshot" else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : self.orderBook if messagetype == "orderbooksnapshot" else update} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
-        if len(self.significantTradeEvents) != 0:
-            insertData.update({'significantTradeEvents': self.significantTradeEvents})
-        try:
-            result=self.DBConn.insert_one(insertData)
-            print(f"Inserted : \n {result}")
-        except Exception as e:
-            print(f"Already inserted\Error occured : \n {e}")
-        self.trades = {'bought':{}, 'sold':{}}
-        self.significantTradeEvents = [] 
+        # mongoDB only accepts strings as keys so we have to convert any and all keys to strings before inserting
+        with threading.Lock():
+            if messagetype == "orderbooksnapshot":
+                conditionedOrderBook = {"asks":{}, "bids":{}}
+                for sideKey, sideDict in self.orderBook.items():
+                    for price, quantity in sideDict.items():
+                        conditionedOrderBook[sideKey][str(price)] = quantity
+            self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
+            self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
+            # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple)
+            insertData = { "_id" : ident, "type": "snapshot" if messagetype == "orderbooksnapshot" else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if messagetype == "orderbooksnapshot" else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            if len(self.significantTradeEvents) != 0:
+                    insertData.update({'significantTradeEvents': self.significantTradeEvents})
+            print("we here at insert")
+            try:
+                result=self.DBConn.insert_one(insertData)
+                print(f"Inserted : \n {result}")
+            except Exception as e:
+                print(f"Already inserted\Error occured : \n {e}")
+                print(f"Tried to insert: {insertData}\n self.trades['bought'] type: {type(self.trades['bought'])} - keys type : {type(list(self.trades['bought'].keys())[0])}")
+            self.trades = {'bought':{}, 'sold':{}}
+            self.significantTradeEvents = [] 
     
-    def snapshotTimer(self):
+    def snapshotTimer(self, *onSelfDelete):
         self.snapshotTimerError.wait(1800)
-        getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
-        getorderbook.start()
-        return
+        if onSelfDelete is not None:
+            getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
+            getorderbook.start()
+            return
+        else:
+            return
 
     def getOrderBookSnapshot(self):
-        # time.sleep(1)
+        time.sleep(1)
         API_endpoint = 'https://api.binance.com'  # url of api server
         getObjectEndpoint = 'api/v3/depth'
         parameterNameSymbol = 'symbol'
@@ -186,22 +211,25 @@ class coin:
                 # This section more than likely is only necessary for 100ms update stream - 1000ms = 1 sec and we can request and receive a snapshot within 1 sec comfortably
                 # 100ms on the otherhand may cause some issues because we may have recieved an update to the snapshot that is newer than what is in the snapshot and if we dont't apply 
                 # that update before the next incoming update our orderbook will be off we essentially skipped/missed an update
-                while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
-                    # print("current update in buffer has old data that is already incoroprated into orderbook snapshot")
-                    # print(f"deleting buffer update for {self.coin} - eventtime: {self.ordBookBuff[0]['E']}  -  First update ID : {self.ordBookBuff[0]['U']}   -   last update ID : {self.ordBookBuff[0]['u']} - # of events in update : {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
-                    del self.ordBookBuff[0]
-                    if len(self.ordBookBuff) == 0:
-                        break
-                print(f"new length after removing unneccessary updates : {len(self.ordBookBuff)} \n")
-                if len(self.ordBookBuff) >= 1 :
-                    print(f"first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']} - # of updates {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
-                    print(f" buffer size : {len(self.ordBookBuff)}")
-                    for ind, eachUpdate in enumerate(self.ordBookBuff):
-                        print(f" performing update for # {ind} out of {len(self.ordBookBuff)} for {self.symbol}")
-                        self.updateOrderBook(eachUpdate)
-                    self.ordBookBuff = []
-                # else:
-                #     print("nothing left in buffer - taking next available/incoming message frame \n")
+                if len(self.ordBookBuff) >= 1: # <-- because we removed the wait before getting snapshot its possible no update messages came in so we have to make sure there are updates before trying to apply them (this will most likely onyl be neccesary at 100mS orderbook stream even then it may not be)
+                    while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
+                        # print("current update in buffer has old data that is already incoroprated into orderbook snapshot")
+                        # print(f"deleting buffer update for {self.coin} - eventtime: {self.ordBookBuff[0]['E']}  -  First update ID : {self.ordBookBuff[0]['U']}   -   last update ID : {self.ordBookBuff[0]['u']} - # of events in update : {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
+                        del self.ordBookBuff[0]
+                        if len(self.ordBookBuff) == 0:
+                            break
+                    print(f"new length after removing unneccessary updates : {len(self.ordBookBuff)} \n")
+                    if len(self.ordBookBuff) >= 1 :
+                        print(f"first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']} - # of updates {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
+                        print(f" buffer size : {len(self.ordBookBuff)}")
+                        for ind, eachUpdate in enumerate(self.ordBookBuff):
+                            print(f" performing update for # {ind} out of {len(self.ordBookBuff)} for {self.symbol}")
+                            self.updateOrderBook(eachUpdate)
+                        self.ordBookBuff = []
+                    # else:
+                    #     print("nothing left in buffer - taking next available/incoming message frame \n")
+                else:
+                    print("No update messages arrived while rertreiving orderbook snapshot")
                 self.SnapShotRecieved = True
                 #------------------------------
             
@@ -209,13 +237,17 @@ class coin:
             print(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)}\nReason : {orderBookEncoded.reason}') #RESTfull request failed 
         return
 
-    def addSelfToStream(self, ws, msgtype):
+    def addSelfToStream(self, ws):
         # msgtype "sub" for subscribing and "unsub" or anything else for unsubscribing
-        message = {"method": "SUBSCRIBE" if msgtype == "sub" else "UNSUBSCRIBE", "params": self.streams, "id": 1 }
+        message = {"method": "SUBSCRIBE", "params": self.streams, "id": 1 }
         ws.send(json.dumps(message))
-        if msgtype == "sub":
-            getsnapshot = threading.Thread(target=self.getOrderBookSnapshot, daemon=True)
-            getsnapshot.start()
+        getsnapshot = threading.Thread(target=self.getOrderBookSnapshot, daemon=True)
+        getsnapshot.start()
+    
+    def removeSelfFromStream(self, ws):
+        message = {"method": "UNSUBSCRIBE", "params": self.streams, "id": 1 }
+        ws.send(json.dumps(message))
+
 
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
@@ -258,7 +290,7 @@ def main():
     DBConn = client['orderbook&trades']
     # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
     # Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
-    Securities = {'btc':coin("BTC", 1, DBConn), 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    Securities = {'btc':coin("BTC", 1, DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
     # genertate the base url from list of objects/securities
     uriEndpoint = "wss://stream.binance.com:9443"
     streams = []
