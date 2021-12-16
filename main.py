@@ -58,7 +58,10 @@ class coin:
         # self.getOrderBookSnapshot()
         self.significantTradeLimit = sigTradeLim
         self.significantTradeEvents = [] 
-    
+        # we want to grab an orderbook snapshot every x seconds (30 min) unless a message error occurs (e.g. an incoming update has an unexpected updateID indicating we missed an update message)
+        #  therefore we have a thread that just waits for the timer to run out or the event to be set and requests another snapshot
+        self.snapshotTimerError = threading.Event()
+
     def updateOrderBook(self, message):
         if message['U'] > self.last_uID + 1:
             errormsg = f"ERROR {self.symbol} updateID for {message['E']} was not what was expected - last_uID logged: {self.last_uID} | uID (first event) of this message : {message['U']} - difference : {float(message['U']) - self.last_uID}"
@@ -66,7 +69,7 @@ class coin:
             self.logMessage(errormsg, priority=3)
             self.SnapShotRecieved = False
             self.orderBook = {'bids':{}, 'asks':{}}
-            self.getOrderBookSnapshot()
+            self.snapshotTimerError.set()
         self.eventTime = message['E']
         self.last_uID = message['u']
         for side in ['a','b']:
@@ -91,6 +94,7 @@ class coin:
         if max(self.orderBook['bids'], key=self.orderBook['bids'].get) > min(self.orderBook['asks'], key=self.orderBook['asks'].get) :
             errormesg = f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}"
             self.logMessage(errormesg, priority=2)
+            self.snapshotTimerError.set()
         self.mongolog()
 
     def addTrade(self, tradeData): # 
@@ -141,8 +145,14 @@ class coin:
         self.trades = {'bought':{}, 'sold':{}}
         self.significantTradeEvents = [] 
     
+    def snapshotTimer(self):
+        self.snapshotTimerError.wait(1800)
+        getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
+        getorderbook.start()
+        return
+
     def getOrderBookSnapshot(self):
-        time.sleep(1)
+        # time.sleep(1)
         API_endpoint = 'https://api.binance.com'  # url of api server
         getObjectEndpoint = 'api/v3/depth'
         parameterNameSymbol = 'symbol'
@@ -194,6 +204,7 @@ class coin:
                 #     print("nothing left in buffer - taking next available/incoming message frame \n")
                 self.SnapShotRecieved = True
                 #------------------------------
+            
         else:
             print(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)}\nReason : {orderBookEncoded.reason}') #RESTfull request failed 
         return
