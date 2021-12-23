@@ -1,4 +1,3 @@
-import keyboard
 import numpy as np
 from requests.api import get
 from websocket import WebSocketApp
@@ -125,17 +124,18 @@ class coin:
         self.mongolog(updatedict)
 
     def logMessage(self, message, **priority):
-        filename = 'db/' + self.coin + str(self.eventTime) + '.txt'
+        filename = 'db/' + self.coin + str(self.eventTime) + '-incident_log.txt'
         # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
         with open(filename, 'a') as file:
             print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  ' priority: '+str(priority['lvl'])} \n{message}", file=file)
 
     def mongolog(self, *update):
-        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if update else "update")
+        # print(f"update present? {update[0]} ")
+        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if not update else "update")
         # mongoDB only accepts strings as keys so we have to convert any and all keys to strings before inserting
         with threading.Lock():
             # mongoDB requires all keys to be strings therefore we ned to condition orderbook in o;rder to enter it
-            if update:
+            if not update:
                 conditionedOrderBook = {"asks":{}, "bids":{}}
                 for sideKey, sideDict in self.orderBook.items():
                     for price, quantity in sideDict.items():
@@ -143,7 +143,7 @@ class coin:
             self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
             self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
             # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple) - if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
-            insertData = { "_id" : ident, "type": "snapshot" if update else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
             if len(self.significantTradeEvents) != 0:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
             try:
@@ -153,7 +153,7 @@ class coin:
                 insertError = f"MongoDB insert error occured : {e}\nTried to insert: {insertData}"
                 print(insertError)
                 self.logMessage(insertError, priority=3 )
-            # ---------------------------
+            # --------------------------- generating some data for bokeh backend development
             with open("db/btcusdt-bokeh_test_data.txt", 'a') as file:
                 print(json.dumps({"time":time.mktime(datetime.now().timetuple()), "orderbook":self.orderBook}), file=file)
             #------------------------------
@@ -274,8 +274,11 @@ def on_error(ws, error):
 def on_close(ws, close_status_code, close_msg):
     print("closed websocket connection")
 
-def on_open(ws, url):
+def on_open(ws, url, Securities):
     print(f'opened connection to : {url} \n')
+    for coinObjects in Securities.values():
+        snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
+        snapshotthread.start()
 
 def main():
     # mongoDB connection object which we will use to log to database - _NOTE: MongoClient creates 2 threads
@@ -300,7 +303,7 @@ def main():
                 uriEndpoint += '/'
     print(f"uri endpoint : {uriEndpoint}")
     # websocket for handling updates -  _NOTE: websocket creates 1 threads
-    ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
+    ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint, Securities=Securities), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
     #-------------------------------------------------------------------------------------------------------------------------------
@@ -314,10 +317,8 @@ def main():
     manager.register('RemoteOperations', partial(RemoteOperations, ws= ws,  securitiesRef=Securities, messageServer=server, DBConn= DBConn))
     #-------------------------------------------------------------------------------------------------------------------------------
     #need to allow buffer to fill up alittle in order to get snapshot and then apply correct updates/mesages to orderbook as per API documentation
-    for coinObjects in Securities.values():
-        snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
-        snapshotthread.start()
-    # we basically wait here until we press esc - _NOTE: Keyboard creates 2 threads
+    # _NOTE: Used to fire off get orderbook snapshot threads here however during testing it was found that the server can be delayed and websocket connection/ getting orderbook may not be timed correctly
+    #  therefore it is safer to get orderbook AFTER a websocket connection is established
     try:
         server.serve_forever()
     except BaseException as e:
