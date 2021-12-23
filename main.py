@@ -154,8 +154,8 @@ class coin:
                 print(insertError)
                 self.logMessage(insertError, priority=3 )
             # --------------------------- generating some data for bokeh backend development
-            with open("db/btcusdt-bokeh_test_data.txt", 'a') as file:
-                print(json.dumps({"time":time.mktime(datetime.now().timetuple()), "orderbook":self.orderBook}), file=file)
+            # with open("db/btcusdt-bokeh_test_data.txt", 'a') as file:
+            #     print(json.dumps({"time":time.mktime(datetime.now().timetuple()), "orderbook":self.orderBook}), file=file)
             #------------------------------
             self.trades = {'bought':{}, 'sold':{}}
             self.significantTradeEvents = [] 
