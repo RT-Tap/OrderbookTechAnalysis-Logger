@@ -23,16 +23,17 @@ class RemoteOperations:
         self.DBConn = DBConn
 
     def addSecurity(self, newcoin, groupAmt, *pair):
-        print(f"\nTrying to add {newcoin}\n")
+        print(f"\nTrying to add {newcoin} - Securities = {self.securities}\n")
         self.securities[newcoin.lower()] = coin(newcoin.upper(), groupAmt, self.DBConn)
         self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
-        return "Remote - Success?"
+        return f"Successfully added {newcoin}."
     
     def removeSecurity(self, symbol):
+        self.securities[symbol].removeSelfCheck = True
         self.securities[symbol].snapshotTimerError.set()
         self.securities[symbol].removeSelfFromStream(self.websocketConnection)
         del self.securities[symbol]
-        return "Remote - Success?"
+        return f"Successfully removed {symbol}."
     
     def getorderbook(self, symbol):
         print(f"User requested new/updated orderbook snapshot for {symbol}")
@@ -49,10 +50,6 @@ class coin:
     def __init__(self, name, groupAmt, DBConn, sigTradeLim=10000):
         self.coin = name.lower()
         self.symbol = name.lower() + "usdt"
-        # if name.lower().partition('usdt')[0] == 'usdt':
-        #     self.symbol = name.lower() + "usdt"
-        # else:
-        #     self.symbol = name.lower()
         self.streams = [self.symbol + "@aggTrade", self.symbol + "@depth@1000ms"]
         self.SnapShotRecieved = False
         self.last_uID = 0
@@ -62,15 +59,13 @@ class coin:
         self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}}
         self.DBConn = DBConn[self.symbol]
-        # self.DBConn = DBConn[self.symbol]
-        # print(f'symbol : {self.symbol} \nstreams: {self.streams}')
-        # time.sleep(2)
-        # self.getOrderBookSnapshot()
         self.significantTradeLimit = sigTradeLim
         self.significantTradeEvents = []
         # we want to grab an orderbook snapshot every x seconds (30 min) unless a message error occurs (e.g. an incoming update has an unexpected updateID indicating we missed an update message)
         #  therefore we have a thread that just waits for the timer to run out or the event to be set and requests another snapshot
         self.snapshotTimerError = threading.Event()
+        # when deleting a security we want to end the orderbookErrorTimer thread but don't want to retrieve and orderbook so this will allow us to check if we are removing or not
+        self.removeSelfCheck = False
 
     def updateOrderBook(self, message):
         if message['U'] > self.last_uID + 1:
@@ -127,54 +122,50 @@ class coin:
         for msgkey, logkey in {"a":"asks","b":"bids"}.items():
             for updates in message[msgkey]:
                 updatedict[logkey].update({updates[0]: float(updates[1])})
-        self.mongolog("update", updatedict)
-
+        self.mongolog(updatedict)
 
     def logMessage(self, message, **priority):
         filename = 'db/' + self.coin + str(self.eventTime) + '.txt'
         # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
         with open(filename, 'a') as file:
-            print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  '- priority: '+str(priority['lvl'])} - {message}", file=file)
-            # print(json.dumps({ "_id" : self.eventTime, 'trades': self.trades, 'orderbook': self.orderBook}), file=file)
-        # self.trades = {'bought':{}, 'sold':{}}
-        # self.significantTradeEvents = [] 
-        # dtime = datetime.now(); unixtime = time.mktime(dtime.timetuple())
-        # print(f"time right now: {dtime} corresponding unix timestamp : {unixtime}")
-        # print(f"now backwards- unix timsetamp now: {unixtime} converted : {datetime.utcfromtimestamp(unixtime).strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  ' priority: '+str(priority['lvl'])} \n{message}", file=file)
 
-    def mongolog(self, messagetype, *update):
-        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if messagetype == "orderbooksnapshot" else "update")
+    def mongolog(self, *update):
+        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if update else "update")
         # mongoDB only accepts strings as keys so we have to convert any and all keys to strings before inserting
         with threading.Lock():
-            if messagetype == "orderbooksnapshot":
+            # mongoDB requires all keys to be strings therefore we ned to condition orderbook in o;rder to enter it
+            if update:
                 conditionedOrderBook = {"asks":{}, "bids":{}}
                 for sideKey, sideDict in self.orderBook.items():
                     for price, quantity in sideDict.items():
                         conditionedOrderBook[sideKey][str(price)] = quantity
             self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
             self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
-            # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple)
-            insertData = { "_id" : ident, "type": "snapshot" if messagetype == "orderbooksnapshot" else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if messagetype == "orderbooksnapshot" else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple) - if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
+            insertData = { "_id" : ident, "type": "snapshot" if update else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
             if len(self.significantTradeEvents) != 0:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
-            print("we here at insert")
             try:
                 result=self.DBConn.insert_one(insertData)
-                print(f"Inserted : \n {result}")
+                # print(f"Inserted : \n {result}")
             except Exception as e:
-                print(f"Already inserted\Error occured : \n {e}")
-                print(f"Tried to insert: {insertData}\n self.trades['bought'] type: {type(self.trades['bought'])} - keys type : {type(list(self.trades['bought'].keys())[0])}")
+                insertError = f"MongoDB insert error occured : {e}\nTried to insert: {insertData}"
+                print(insertError)
+                self.logMessage(insertError, priority=3 )
+            # ---------------------------
+            with open("db/btcusdt-bokeh_test_data.txt", 'a') as file:
+                print(json.dumps({"time":time.mktime(datetime.now().timetuple()), "orderbook":self.orderBook}), file=file)
+            #------------------------------
             self.trades = {'bought':{}, 'sold':{}}
             self.significantTradeEvents = [] 
     
     def snapshotTimer(self, *onSelfDelete):
+        print(f"snapshottimer for created {self.symbol}")
         self.snapshotTimerError.wait(1800)
-        if onSelfDelete is not None:
+        if self.removeSelfCheck == False:
             getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
             getorderbook.start()
-            return
-        else:
-            return
 
     def getOrderBookSnapshot(self):
         time.sleep(1)
@@ -188,7 +179,7 @@ class coin:
         orderBookEncoded = get(orderBookURL) #import requests   then this line becomes request.get(orderBookURL)
         if orderBookEncoded.ok: #process it if we get a response of ok=200
             rawOrderBook = orderBookEncoded.json() #returns a dataframe ----also has code to return lists of dictionaries with bids and prices
-            print(f'\nSuccesfully retreived order book for  {self.symbol}!\n')
+            print(f'\nSuccesfully retreived order book for  {self.symbol} at {time.mktime(datetime.now().timetuple())}\n')
             # we dont really want any incoming orderbook updates to interrupt (re)setting the orderbook so we lock the thread for this portion
             with threading.Lock():
                 # set/update orderbook to snapshot 
@@ -200,7 +191,7 @@ class coin:
                 self.last_uID = rawOrderBook['lastUpdateId']
                 # we are getting 5000 long snapshot however websocket only updates top 1000 so we need to shorten it for storing local copy/processing
                 # therefore we log the full 5000 long orderbook then shorten it down
-                self.mongolog('orderbooksnapshot')
+                self.mongolog()
                 pricelist = {'asks':  sorted(list(self.orderBook['asks'].keys())), 'bids': sorted(list(self.orderBook['bids'].keys()), reverse=True)}
                 pricelist['asks'] = pricelist['asks'][1000:]
                 pricelist['bids'] = pricelist['bids'][1000:]
@@ -232,7 +223,9 @@ class coin:
                     print("No update messages arrived while rertreiving orderbook snapshot")
                 self.SnapShotRecieved = True
                 #------------------------------
-            
+            self.snapshotTimerError.clear()
+            snapshotRequestTimer = threading.Thread(target=self.snapshotTimer, daemon=True)
+            snapshotRequestTimer.start()
         else:
             print(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)}\nReason : {orderBookEncoded.reason}') #RESTfull request failed 
         return
@@ -248,10 +241,8 @@ class coin:
         message = {"method": "UNSUBSCRIBE", "params": self.streams, "id": 1 }
         ws.send(json.dumps(message))
 
-
 def on_message(ws, message, SecuritiesRef):
     messaged = json.loads(message)
-    #print(messaged)
     CoinObj = SecuritiesRef[messaged['stream'].partition('usdt')[0]]
     if "stream" in messaged:
         if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
@@ -269,11 +260,13 @@ def on_message(ws, message, SecuritiesRef):
             CoinObj.addTrade(messaged['data']) #, messaged['E']
         else:      #the catch all statement
             print('Incoming message being handled incorrectly.')
-    elif "result" in messaged:
-        if messaged['result'] == None:
-            print("Successfully (un)subscribed")
     else:
-        print("Unexpected message handling")
+        print(f"\n\n\n\n Subscribing message\n{messaged}\n\n\n" )
+    # elif "result" in messaged:
+    #     if messaged['result'] == None:
+    #         print(f"\n\n\nSuccessfully (un)subscribed\n{messaged}\n\n\n")
+    # else:
+    #     print(f"Unexpected message handling\n{messaged}")
 
 def on_error(ws, error):
     print(error)
@@ -328,7 +321,14 @@ def main():
     try:
         server.serve_forever()
     except BaseException as e:
-        print(f"closed out server with exception : {e}")
+        if e == 0:
+            closemsg = f"Closed multiprocessing server as expected"
+      
+        else:
+            closemsg = f"Unexpected error when closing multiprocessing server : {e}"
+        # with open('fintechappLog.txt', 'a') as file:
+        #     print(f"{datetime.now()} -  priority: 1 \n{closemsg}", file=file)
+        print(closemsg)
     ws.close()
     listeningForMessages.join()
     print(f"active threads J : {threading.active_count()}")
