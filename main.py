@@ -1,4 +1,3 @@
-import numpy as np
 from requests.api import get
 from websocket import WebSocketApp
 from functools import partial
@@ -9,7 +8,13 @@ import fnmatch # needed for string wildcard matching
 from keyboard import wait as keyboardwait
 from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
-from datetime import datetime # dtime = datetime.now(); unixtime = time.mktime(dtime.timetuple()) -  datetime.utcfromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
+from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
+
+# this is handy because we will be using utc basically everywhere and to get back to local we use this
+def utc_to_local(utc_dt):
+    return utc_dt.replace(tzinfo=datetime.timezone.utc).astimezone(tz=None)
+
+
 
 class RemoteOperations:
     def __init__(self, ws, securitiesRef, messageServer, DBConn):
@@ -131,7 +136,7 @@ class coin:
 
     def mongolog(self, *update):
         # print(f"update present? {update[0]} ")
-        ident =  str(time.mktime(datetime.now().timetuple())*1000)+("snapshot" if not update else "update")
+        ident =  str(datetime.timestamp(datetime.utcnow())*1000)+("snapshot" if not update else "update")
         # mongoDB only accepts strings as keys so we have to convert any and all keys to strings before inserting
         with threading.Lock():
             # mongoDB requires all keys to be strings therefore we ned to condition orderbook in o;rder to enter it
@@ -143,7 +148,8 @@ class coin:
             self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
             self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
             # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple) - if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
-            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            # insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':time.mktime(datetime.utcnow().timetuple()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':datetime.timestamp(datetime.utcnow()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
             if len(self.significantTradeEvents) != 0:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
             try:
@@ -179,7 +185,7 @@ class coin:
         orderBookEncoded = get(orderBookURL) #import requests   then this line becomes request.get(orderBookURL)
         if orderBookEncoded.ok: #process it if we get a response of ok=200
             rawOrderBook = orderBookEncoded.json() #returns a dataframe ----also has code to return lists of dictionaries with bids and prices
-            print(f'\nSuccesfully retreived order book for  {self.symbol} at {time.mktime(datetime.now().timetuple())}\n')
+            print(f'\nSuccesfully retreived order book for  {self.symbol} at {datetime.now()}\n')
             # we dont really want any incoming orderbook updates to interrupt (re)setting the orderbook so we lock the thread for this portion
             with threading.Lock():
                 # set/update orderbook to snapshot 
