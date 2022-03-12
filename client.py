@@ -46,17 +46,30 @@ if args.symbols != None: symbols = args.symbols
 # if not len(sys.argv) > 1: 
 print(ourIP)
 
-# # m = BaseManager(address=(host, port), authkey=b'secret')
+# m = BaseManager(address=(host, port), authkey=b'secret')
 # m = BaseManager(address=(host, port), authkey=authkey.encode('ASCII'))
-# m.register('RemoteOperations')
-# m.connect()
-# remoteops = m.RemoteOperations()
-# # print(remoteops.test(2))
-# # time.sleep(2)
+m = BaseManager(address=('127.0.0.1', 12345), authkey=b'secret')
+m.register('RemoteOperations')
+m.connect()
+remoteops = m.RemoteOperations()
+
+
+# print(remoteops.ConnectionTest(ourIP))
+
 # print(remoteops.addSecurity("ada", 0.0001))
-# time.sleep(3)
+
 # print(remoteops.removeSecurity("ada"))
-# time.sleep(2)
-# # remoteops.getorderbook("btc")
-# # time.sleep(7)
-# remoteops.terminate()
+
+# print(remoteops.retrieveCurrentOrderbook('btc'))
+
+# remoteops.listSecurities()
+
+# remoteops.RequestOrderbookSnapShot("btc")
+# remoteops.RequestOrderbookSnapShot("ada")
+print(remoteops.addSecurity("ada", 0.0001))
+time.sleep(6)
+remoteops.resetWebSocket()
+time.sleep(12)
+remoteops.terminate()
+
+# print(remoteops.getThreadCount())

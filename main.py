@@ -11,15 +11,21 @@ from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
 from enum import Enum
 
-LOGLEVEL = 'Error'
+# highest level of information that we should log
+LOGLEVEL = 'Debug'
 mongoDBserver = '192.168.1.254:27017'
+# this needs gloabel scope so that remoteManager can refrence it
+WSResetEvent= threading.Event()
+CurrentWebSocketTimerThread = None
+# bad practice to abruptly end thread so we keep track of any we create but can't do much in the way of the threads our libraries spawn
+exitRoutine = False
 
 # this is handy because we will be using utc basically everywhere and to get back to local we use this
 def utc_to_local(utc_dt):
     return utc_dt.replace(tzinfo=datetime.timezone.utc).astimezone(tz=None)
     # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
 
-def logMessage(message, **priority):
+def logMessage(message, **kwargs):
     # 0 - emergency system unuable
     # 1 - alert immediate action needed
     # 2 - critical conditions exist
@@ -29,13 +35,9 @@ def logMessage(message, **priority):
     # 6 - info informational messages
     # 7 - debug
     # date - time - log level - Event - message
-    loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,7)))
-    if loglvl[priority] > (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
-        print(f"{datetime.now()} - {'loglvl: debug' if priority.get('lvl') == None else  'loglvl: '+priority['lvl']} -- {message}")
-    #filename = 'db/' + self.coin + str(self.eventTime) + '-incident.log'
-    # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
-    #with open(filename, 'a') as file:
-    #    print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  ' priority: '+str(priority['lvl'])} \n{message}", file=file)
+    loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,8)))
+    if loglvl[kwargs['priority']] <= (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
+        print(f"{datetime.now()} - {'loglvl: '+ kwargs['priority']} : {message}")
 
 class RemoteOperations:
     def __init__(self, ws, securitiesRef, messageServer, DBConn):
@@ -61,7 +63,7 @@ class RemoteOperations:
         del self.securities[symbol]
         return f"Successfully removed {symbol} from websocket stream."
     
-    def getorderbook(self, symbol):
+    def RequestOrderbookSnapShot(self, symbol):
         logMessage(f"Remote client requested new/updated orderbook snapshot for {symbol}", priority='Info')
         self.securities[symbol.lower()].snapshotTimerError.set()
     
@@ -75,9 +77,19 @@ class RemoteOperations:
     def ConnectionTest(self, gimme):
         logMessage(f"Remote connection test from:  {gimme} ", priority="Info")
         return "Success"
+
+    def getThreadCount(self):
+        print(f'THREAD COUNT: {threading.active_count()} ')
+        print(f'ENUMERATED THREADS:{threading.enumerate()} ')
+        return json.dumps({'activeCount': threading.active_count(), 'enumerated':threading.enumerate()})
     
-    def restartWebSocket(self):
-        pass
+    def resetWebSocket(self):
+        logMessage(f'Received a request to reset websocket connection', priority='Info')
+        WSResetEvent.set()
+    
+    def retrieveCurrentOrderbook(self, security):
+        return self.securities[security]['orderBook']
+
 
 class coin:
     def __init__(self, name, groupAmt, DBConn, sigTradeLim=10000):
@@ -97,13 +109,16 @@ class coin:
         # we want to grab an orderbook snapshot every x seconds (30 min) unless a message error occurs (e.g. an incoming update has an unexpected updateID indicating we missed an update message)
         #  therefore we have a thread that just waits for the timer to run out or the event to be set and requests another snapshot
         self.snapshotTimerError = threading.Event()
+        # keep track of thread so we can join them 
+        self.currenSnapShotTimerThread = None
         # when deleting a security we want to end the orderbookErrorTimer thread but don't want to retrieve and orderbook so this will allow us to check if we are removing or not
         self.removeSelfCheck = False
+
 
     def updateOrderBook(self, message):
         if message['U'] > self.last_uID + 1:
             errormsg = f"ERROR {self.symbol} updateID for {message['E']} was not what was expected - last_uID logged: {self.last_uID} | uID (first event) of this message : {message['U']} - difference : {float(message['U']) - self.last_uID}"
-            logMessage(errormsg, priority='warning')
+            logMessage(errormsg, priority='Warning')
             self.SnapShotRecieved = False
             self.orderBook = {'bids':{}, 'asks':{}}
             self.snapshotTimerError.set()
@@ -130,9 +145,8 @@ class coin:
                 del self.orderBook[bookSide][(min(self.orderBook['bids'], key=self.orderBook['bids'].get)) if side == 'b' else (max(self.orderBook['asks'], key=self.orderBook['asks'].get))]
         if max(self.orderBook['bids'], key=self.orderBook['bids'].get) > min(self.orderBook['asks'], key=self.orderBook['asks'].get) :
             errormesg = f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}"
-            self.logMessage(errormesg, priority='warning')
+            self.logMessage(errormesg, priority='Warning')
             self.snapshotTimerError.set()
-        #self.mongolog()
 
     def addTrade(self, tradeData): # 
         # round all trades up to predetermined sigfigs
@@ -185,16 +199,22 @@ class coin:
             self.trades = {'bought':{}, 'sold':{}}
             self.significantTradeEvents = [] 
     
-    def snapshotTimer(self, *onSelfDelete):
-        logMessage(f"Snapshottimer started for: {self.symbol}", priority='debug')
+    def snapshotTimer(self):
+        logMessage(f"Snapshottimer started for: {self.symbol}", priority='Debug')
         # a thread is created for this function and we wait 1800 seconds UNLESS the snapshotTimerError flag is set from elsewhere becaue of an unexpected behaviour and therefore we can start over
         # from a fresh orderbook snapshot
-        self.snapshotTimerError.wait(1800)
-        # make sure we didnt start an exit routine in whch case no point starting a new request thread
-        if self.removeSelfCheck == False:
+        # # keeping trtack of threads:
+        # # join the old thread that should have finished to clean it up - wont be active however python will store it in active list 
+        # # refrence: https://stackoverflow.com/questions/43983882/python-when-does-a-thread-terminate-oviously-not-immediately-at-return
+        # logMessage(f'SnapshotTimer thread started active thread count pre-join: {threading.active_count()}', priority='Debug')
+        # logMessage(f'Joined our parent thread - post-join thread count: {threading.active_count()}', priority='Debug')
+        self.snapshotTimerError.wait(1800) # 1800 sec = 30 min
+        # make sure we didnt want to remove this symbol from the websocket connection
+        if self.removeSelfCheck == False and exitRoutine == False:
             # create a thread that grabs a fresh orderbook snapshot
             getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
             getorderbook.start()
+            # self.joinOldThreads(getorderbook)
 
     def getOrderBookSnapshot(self):
         time.sleep(1)
@@ -252,11 +272,12 @@ class coin:
                 self.SnapShotRecieved = True
                 #------------------------------
             self.snapshotTimerError.clear()
-            snapshotRequestTimer = threading.Thread(target=self.snapshotTimer, daemon=True)
+            snapshotRequestTimer = threading.Thread(target=self.snapshotTimer,daemon=True) # , name= self.symbol+'snapshotRequestTimer'
             snapshotRequestTimer.start()
+            self.currenSnapShotTimerThread = snapshotRequestTimer
         else:
             logMessage(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)} -- Reason : {orderBookEncoded.reason}', priority='Error') #RESTfull request failed 
-        return
+        # return snapshotRequestTimer
 
     def addSelfToStream(self, ws):
         logMessage(f'Connecting websockets data stream for {self.symbol}', priority='Info')
@@ -278,16 +299,26 @@ def on_message(ws, message, SecuritiesRef):
         if fnmatch.fnmatch(messaged['stream'], "*@depth@1000ms") :
             # although it should be possbile to recieve an update within the time period between orderbook updates from websocket stream best practice is to log any messages as well
             if CoinObj.SnapShotRecieved == False:
-                CoinObj.ordBookBuff.append(messaged['data'])
+                # because we have to reset connection every 24 hours there will be a point where 2 websockets are open calling the same function, in that case we have to drop every duplicate
+                # but because these messages come in at the same time we need to make sure we handle them one at a time sequenctially so no race conditions occur
+                with threading.Lock():
+                    if len(CoinObj.ordBookBuff) == 0:
+                        CoinObj.ordBookBuff.append(messaged['data'])
+                        logMessage(f'Adding first element to update buffer for {CoinObj.symbol}', priority='Debug')
+                    else:
+                        if CoinObj.ordBookBuff[-1]['E'] != messaged['data']['E']:
+                            CoinObj.ordBookBuff.append(messaged['data'])
+                            logMessage(f'Adding to {CoinObj.symbol} update buffer', priority='Debug')
+                        else:
+                            logMessage(f'Dropping duplicate message for {CoinObj.symbol}', priority='Debug')
                 logMessage(f'Appending message to buffer for {getattr(CoinObj, "coin")}', priority='Debug')
             else:
-                logMessage(f"Orderbook update for {getattr(CoinObj, 'coin')} - last recorded ID: {CoinObj.last_uID} -- Update = eventtime : {messaged['data']['E']}, first UID: {messaged['data']['U']},  last uID : {messaged['data']['u']} ", priority='Debug')
-                # we will keep an up to date orderbook locally 
+                logMessage(f"Received orderbook update for {getattr(CoinObj, 'coin')} - last recorded ID: {CoinObj.last_uID} -- Update = eventtime : {messaged['data']['E']}, first UID: {messaged['data']['U']},  last uID : {messaged['data']['u']} ", priority='Debug')
+                # we will keep an up to date orderbook locally and log just the updates save a lot of disk space by only logging changes - therefore we keep this as 2 separate steps as well the update and the conditioning of data and log
                 CoinObj.updateOrderBook(messaged['data'])
-                # it is more "efficient" or rather we can save a lot of disk space by only logging changes to the orderbook so we take the message data and send it to be conditioned and logged
                 CoinObj.messageupdates(messaged['data'])
         elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
-            CoinObj.addTrade(messaged['data']) #, messaged['E']
+            CoinObj.addTrade(messaged['data']) 
     else:
         logMessage(f"WebSocket (un)subscribed from stream, message : {messaged}", priority='Info' )
     # else:      #the catch all statement
@@ -300,26 +331,13 @@ def on_close(ws, close_status_code, close_msg):
     logMessage("Closed websocket connection", priority='Info')
 
 def on_open(ws, url, Securities):
-    logMessage(f'Websocket connected to : {url}', priority='Info')
+    logMessage(f'New websocket connection to : {url}', priority='Info')
     for coinObjects in Securities.values():
-        snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
+        snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, name=(coinObjects.symbol+'-getsnapshotThread') ,daemon=True)
         snapshotthread.start()
+    
 
-def main():
-    # mongoDB connection object which we will use to log to database - _NOTE: MongoClient creates 2 threads
-    logMessage(f'Attempting to connect to mongoDB server at {mongoDBserver}')
-    try:
-        client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
-        DBConn = client['orderbook&trades']
-        logMessage('Successfully connected to mongoDB server', priority='Info')
-    except Exception as e:
-        logMessage(f'Error connecting to mongoDB server- Error: {e.__class__}', priority='Info')
-        logMessage(f'Fix issue and try again. Exiting ...', priority='Info')
-        exit(0)
-    # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
-    # Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
-    Securities = {'btc':coin("BTC", 1, DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
-    # genertate the base url from list of objects/securities
+def createWebSocketURL(Securities):
     uriEndpoint = "wss://stream.binance.com:9443"
     streams = []
     for coinobjects in Securities.values():
@@ -333,13 +351,67 @@ def main():
             uriEndpoint +=  item
             if index-1 < len(streams)-2:
                 uriEndpoint += '/'
+    return uriEndpoint
+
+
+def webSocketTimer(argDict):
+    # unblocking wait - either timer runs out or we set WSResetEvent flag 
+    WSResetEvent.wait(72000) # 72000 secs = 20 hours
+    WSResetEvent.clear()
+    logMessage(f"Resetting WebSocket connection", priority='Info')
+    # set all messages to buffer while we close this connection and open a new one
+    for eachCoin in argDict['securities']:
+        argDict['securities'][eachCoin].SnapShotRecieved = False
+    argDict['websocket'].close()
+    argDict['oldWSthread'].join()
+    # no point inopeniong new connection when we want to exit
+    if argDict['exitFlag'] != True:
+        # open new connection before closing old one - opening new connection should also take care of firing off snapshot timer thread
+        uriEndpoint = createWebSocketURL(argDict['securities'])
+        newWSConnection = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint, Securities=argDict['securities']), on_message=partial(on_message, SecuritiesRef=argDict['securities']), on_error=on_error, on_close=on_close)
+        WebSocketThread = threading.Thread(target = newWSConnection.run_forever, daemon=True) 
+        WebSocketThread.start()
+
+        # update all of our old websocket connections to use the new connection object
+        argDict['websocket'] = newWSConnection
+        # create new thread to replace this one
+        threadArgs = {"securities": argDict['securities'], 'websocket': newWSConnection, 'oldWSthread': WebSocketThread, 'exitFlag': argDict['exitFlag']}
+        newWSTimerThread = threading.Thread(target=webSocketTimer, args=(threadArgs,), daemon=True)
+        global CurrentWebSocketTimerThread
+        CurrentWebSocketTimerThread = newWSTimerThread
+        newWSTimerThread.start()
+
+
+def main():
+    # mongoDB connection object which we will use to log to database - _NOTE: MongoClient creates 2 threads
+    logMessage(f'Attempting to connect to mongoDB server at {mongoDBserver}', priority='Info')
+    try:
+        # client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
+        client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='ProductionTest1', authMechanism='SCRAM-SHA-256')
+        DBConn = client['ProductionTest1']
+        logMessage('Successfully connected to mongoDB server', priority='Info')
+    except Exception as e:
+        logMessage(f'Error connecting to mongoDB server- Error: {e.__class__} \nExiting ...', priority='Info')
+        exit(0)
+    # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
+    # Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    Securities = {'btc':coin("BTC", 1, DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    # genertate the base url from list of objects/securities
+    uriEndpoint = createWebSocketURL(Securities)
     logMessage(f"Attempting to connect to WebSocket endpoint : {uriEndpoint}", priority='Info')
     # websocket for handling updates -  _NOTE: websocket creates 1 threads
     ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint, Securities=Securities), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
-    listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
+    listeningForMessages = threading.Thread(target = ws.run_forever, name='WebSocketThread',daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
+
     # because websocket connections to binance only last 24 hours we will need to manually reconect after around 22 hours
     # main thread is being blocked by remote server so we need to create a thread that waits ~21-23 hours and then closes the connection and starts a new one
+    exitRoutine = False
+    websocektTimerArgPackage = {"securities": Securities, 'websocket': ws, 'oldWSthread': listeningForMessages, 'exitFlag': exitRoutine}
+    websocketResetTimer = threading.Thread(target= webSocketTimer, args=(websocektTimerArgPackage,), daemon=True) #, name='WebSocketTimer'
+    global CurrentWebSocketTimerThread
+    CurrentWebSocketTimerThread = websocketResetTimer
+    websocketResetTimer.start()
 
     #-------------------------------------------------------------------------------------------------------------------------------
     # _NOTE: BaseManager creates 1 threads
@@ -358,21 +430,33 @@ def main():
         logMessage('Entering steady state/main loop of application', priority='Info')
         server.serve_forever()
     except BaseException as e:
-        if e == 0:
-            closemsg = f"Closed multiprocessing server as expected"
-      
+        # print(f'EXCEPTION!!!!!!! type: {type(e)} - {e} - string? {isinstance(LOGLEVEL, str)} ')
+        if isinstance(e, SystemExit):
+            closemsg = f"Correctly closed BaseManager Remote server as expected"
         else:
-            closemsg = f"Unexpected error with main blocking statement or closing down BaseManager : {e}"
-        # with open('fintechappLog.txt', 'a') as file:
-        #     print(f"{datetime.now()} -  priority: 1 \n{closemsg}", file=file)
+            closemsg = f"Unexpected error during main thread blocking with BaseManager Remote Server or with closing down BaseManager - Error: {e}"
         logMessage(closemsg, priority='Info')
     except:
         logMessage('Error opening Remote Server and therefore cannot enter maing loop of application ', priority='Error')
-    logMessage('Closing websocket Connection and joining it\'s thread in preparation for application exit.', priority='Info')
-    ws.close()
-    listeningForMessages.join()
+    logMessage('Shutting down sequnce, closing websocket Connection,  joining any threads in preparation for application exit.', priority='Info')
+    logMessage(f'Preshutdown thread count: {threading.active_count()}', priority='Debug')
+    
+    # ws.close()                        # these two will just be ;taken care of in websockettimer
+    # listeningForMessages.join()
+    WSResetEvent.set()
+    print(f"Active threads : {threading.active_count()}")
+    CurrentWebSocketTimerThread.join()
+    print(f"Active threads : {threading.active_count()}")
+    for security in Securities:
+        # print(f"!!!!!!!!!!EXIRT!!!!! Securities[security] : {Securities[security]} type: {type(Securities[security])}")
+        Securities[security].snapshotTimerError.set()
+        if Securities[security].currenSnapShotTimerThread is not None:
+            print('Waiting to join snapshottimer')
+            Securities[security].currenSnapShotTimerThread.join()
     logMessage(f"Active threads : {threading.active_count()}", priority='Debug')
     logMessage('Exitting application ...', priority='Info')
+    print(f'THREAD COUNT: {threading.active_count()} ')
+    print(f'ENUMERATED THREADS:{threading.enumerate()} ')
     exit(0)
 
 if __name__ == "__main__":
