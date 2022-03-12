@@ -9,12 +9,33 @@ from keyboard import wait as keyboardwait
 from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
+from enum import Enum
+
+LOGLEVEL = 'Error'
+mongoDBserver = '192.168.1.254:27017'
 
 # this is handy because we will be using utc basically everywhere and to get back to local we use this
 def utc_to_local(utc_dt):
     return utc_dt.replace(tzinfo=datetime.timezone.utc).astimezone(tz=None)
+    # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
 
-
+def logMessage(message, **priority):
+    # 0 - emergency system unuable
+    # 1 - alert immediate action needed
+    # 2 - critical conditions exist
+    # 3 - error conditions exist
+    # 4 - warning conditiosn exit
+    # 5 - notice. normal but significant conditions exist
+    # 6 - info informational messages
+    # 7 - debug
+    # date - time - log level - Event - message
+    loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,7)))
+    if loglvl[priority] > (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
+        print(f"{datetime.now()} - {'loglvl: debug' if priority.get('lvl') == None else  'loglvl: '+priority['lvl']} -- {message}")
+    #filename = 'db/' + self.coin + str(self.eventTime) + '-incident.log'
+    # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
+    #with open(filename, 'a') as file:
+    #    print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  ' priority: '+str(priority['lvl'])} \n{message}", file=file)
 
 class RemoteOperations:
     def __init__(self, ws, securitiesRef, messageServer, DBConn):
@@ -27,28 +48,36 @@ class RemoteOperations:
         self.DBConn = DBConn
 
     def addSecurity(self, newcoin, groupAmt, *pair):
-        print(f"\nTrying to add {newcoin} - Securities = {self.securities}\n")
+        logMessage(f"RemoteClient requested {newcoin} to be logged as well.", priority='Info')
         self.securities[newcoin.lower()] = coin(newcoin.upper(), groupAmt, self.DBConn)
         self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
-        return f"Successfully added {newcoin}."
+        return f"Successfully added {newcoin} to websocket stream."
     
     def removeSecurity(self, symbol):
+        logMessage(f"RemoteClient requested {symbol} to be removed from logging.", priority='Info')
         self.securities[symbol].removeSelfCheck = True
         self.securities[symbol].snapshotTimerError.set()
         self.securities[symbol].removeSelfFromStream(self.websocketConnection)
         del self.securities[symbol]
-        return f"Successfully removed {symbol}."
+        return f"Successfully removed {symbol} from websocket stream."
     
     def getorderbook(self, symbol):
-        print(f"User requested new/updated orderbook snapshot for {symbol}")
+        logMessage(f"Remote client requested new/updated orderbook snapshot for {symbol}", priority='Info')
         self.securities[symbol.lower()].snapshotTimerError.set()
     
     def terminate(self):
-        print("Remote terminate command received")
+        logMessage("Remote terminate command received", priority='Info')
         self.messageServer.stop_event.set()
 
-    def test(self, gimme):
-        print(f"This is a test! --> {gimme}")
+    def listSecurities(self):
+        return self.securities.keys()
+
+    def ConnectionTest(self, gimme):
+        logMessage(f"Remote connection test from:  {gimme} ", priority="Info")
+        return "Success"
+    
+    def restartWebSocket(self):
+        pass
 
 class coin:
     def __init__(self, name, groupAmt, DBConn, sigTradeLim=10000):
@@ -74,8 +103,7 @@ class coin:
     def updateOrderBook(self, message):
         if message['U'] > self.last_uID + 1:
             errormsg = f"ERROR {self.symbol} updateID for {message['E']} was not what was expected - last_uID logged: {self.last_uID} | uID (first event) of this message : {message['U']} - difference : {float(message['U']) - self.last_uID}"
-            print(errormsg)
-            self.logMessage(errormsg, priority=3)
+            logMessage(errormsg, priority='warning')
             self.SnapShotRecieved = False
             self.orderBook = {'bids':{}, 'asks':{}}
             self.snapshotTimerError.set()
@@ -94,7 +122,7 @@ class coin:
                         pass
                 else:
                     self.orderBook[bookSide].update({float(update[0]): float(update[1])})
-        # not entirely sure why but it seems when the orderbook grows bigger than 1000 on either side we need to remove the highest ask and lowest bid in order to keep orders from one side flowing into the other
+            # when the orderbook grows bigger than 1000 on either side we need to remove the highest ask and lowest bid in order to keep orders from one side flowing into the other
             counter = 0
             while len(self.orderBook[bookSide]) > 1000:
                 counter += 1
@@ -102,7 +130,7 @@ class coin:
                 del self.orderBook[bookSide][(min(self.orderBook['bids'], key=self.orderBook['bids'].get)) if side == 'b' else (max(self.orderBook['asks'], key=self.orderBook['asks'].get))]
         if max(self.orderBook['bids'], key=self.orderBook['bids'].get) > min(self.orderBook['asks'], key=self.orderBook['asks'].get) :
             errormesg = f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}"
-            self.logMessage(errormesg, priority=2)
+            self.logMessage(errormesg, priority='warning')
             self.snapshotTimerError.set()
         #self.mongolog()
 
@@ -128,48 +156,43 @@ class coin:
                 updatedict[logkey].update({updates[0]: float(updates[1])})
         self.mongolog(updatedict)
 
-    def logMessage(self, message, **priority):
-        filename = 'db/' + self.coin + str(self.eventTime) + '-incident_log.txt'
-        # at this point we wrap up all events between last function call (orderbook update) and now (this function call / orderbook update), put them in a temporary object, clear the logging object and log the original (temporary/old) data
-        with open(filename, 'a') as file:
-            print(f"{datetime.now()} - {'' if priority.get('lvl') == None else  ' priority: '+str(priority['lvl'])} \n{message}", file=file)
-
     def mongolog(self, *update):
-        # print(f"update present? {update[0]} ")
+        # ID of mongoDB entry relies on whether an update was provided - if not update is provided we log the orderbook as we just received a snapshot otherwise we log the update
         ident =  str(datetime.timestamp(datetime.utcnow())*1000)+("snapshot" if not update else "update")
-        # mongoDB only accepts strings as keys so we have to convert any and all keys to strings before inserting
+        # We dont want any data changing while were logging it could cause us to loose track of updates
         with threading.Lock():
-            # mongoDB requires all keys to be strings therefore we ned to condition orderbook in o;rder to enter it
+            # if no update was passed in then we are logging the orderbook as we just got a new snapshot
             if not update:
+                # mongoDB requires all keys to be strings therefore we ned to condition orderbook in order to enter it
                 conditionedOrderBook = {"asks":{}, "bids":{}}
                 for sideKey, sideDict in self.orderBook.items():
                     for price, quantity in sideDict.items():
                         conditionedOrderBook[sideKey][str(price)] = quantity
             self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
             self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
-            # *arguments are tuples so we have to unpack them (dont HAVE to but we want the JSON to log update as a dict not tuple) - if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
-            # insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':time.mktime(datetime.utcnow().timetuple()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
-            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':datetime.timestamp(datetime.utcnow()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # convert fro;m timestamp to dat time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
+            # if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
+            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':datetime.timestamp(datetime.utcnow()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # if no update was passed in then we are logging the orderbook as we just got a new snapshot
+            # because were consolidating orders at realtively close to the same price points we also want to log any significant trade events that might be of interest when analyzing the data
             if len(self.significantTradeEvents) != 0:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
             try:
                 result=self.DBConn.insert_one(insertData)
-                # print(f"Inserted : \n {result}")
+                logMessage(f"Inserted : \n {result}", priority='Debug')
             except Exception as e:
-                insertError = f"MongoDB insert error occured : {e}\nTried to insert: {insertData}"
-                print(insertError)
-                self.logMessage(insertError, priority=3 )
-            # --------------------------- generating some data for bokeh backend development
-            # with open("db/btcusdt-bokeh_test_data.txt", 'a') as file:
-            #     print(json.dumps({"time":time.mktime(datetime.now().timetuple()), "orderbook":self.orderBook}), file=file)
-            #------------------------------
+                logMessage(f"MongoDB insert error occured : {e}", priority='Error')
+                logMessage(f"Tried to insert: {insertData}", priority='Debug')
+            # clear trade tracking for next time interval
             self.trades = {'bought':{}, 'sold':{}}
             self.significantTradeEvents = [] 
     
     def snapshotTimer(self, *onSelfDelete):
-        print(f"snapshottimer for created {self.symbol}")
+        logMessage(f"Snapshottimer started for: {self.symbol}", priority='debug')
+        # a thread is created for this function and we wait 1800 seconds UNLESS the snapshotTimerError flag is set from elsewhere becaue of an unexpected behaviour and therefore we can start over
+        # from a fresh orderbook snapshot
         self.snapshotTimerError.wait(1800)
+        # make sure we didnt start an exit routine in whch case no point starting a new request thread
         if self.removeSelfCheck == False:
+            # create a thread that grabs a fresh orderbook snapshot
             getorderbook = threading.Thread(target= self.getOrderBookSnapshot, daemon=True)
             getorderbook.start()
 
@@ -182,14 +205,16 @@ class coin:
         parameterNameLimit = 'limit'
         parameterValueLimit = '1000'
         orderBookURL = f'{API_endpoint}/{getObjectEndpoint}?{parameterNameSymbol}={parameterValueSymbol}&{parameterNameLimit}={parameterValueLimit}'  # /{orderbookDepth}
-        orderBookEncoded = get(orderBookURL) #import requests   then this line becomes request.get(orderBookURL)
-        if orderBookEncoded.ok: #process it if we get a response of ok=200
-            rawOrderBook = orderBookEncoded.json() #returns a dataframe ----also has code to return lists of dictionaries with bids and prices
-            print(f'\nSuccesfully retreived order book for  {self.symbol} at {datetime.now()}\n')
+        logMessage(f'Retrieving orderbook for {self.symbol} from {orderBookURL}', priority='Info')
+        orderBookEncoded = get(orderBookURL)
+        if orderBookEncoded.ok: 
+            rawOrderBook = orderBookEncoded.json() 
+            logMessage(f'Succesfully retreived order book for  {self.symbol}', priority="Info")
             # we dont really want any incoming orderbook updates to interrupt (re)setting the orderbook so we lock the thread for this portion
             with threading.Lock():
                 # set/update orderbook to snapshot 
-                self.trades = {'bought':{}, 'sold':{}} # need to reset the orderbook in case this is an update mid operation so were not leaving any old data behind in case it doesnt get updated
+                # need to reset the orderbook in case this is an update mid operation so were not leaving any old data behind in case it doesnt get updated
+                self.trades = {'bought':{}, 'sold':{}} 
                 for orders in rawOrderBook['bids']:
                     self.orderBook['bids'].update({float(orders[0]): float(orders[1])})
                 for orders in rawOrderBook['asks']:
@@ -204,39 +229,37 @@ class coin:
                 for side in ['asks', 'bids']:
                     for price in pricelist[side]:
                         del self.orderBook[side][price]
-                #----update from buffer section-------- 
-                # This section more than likely is only necessary for 100ms update stream - 1000ms = 1 sec and we can request and receive a snapshot within 1 sec comfortably
-                # 100ms on the otherhand may cause some issues because we may have recieved an update to the snapshot that is newer than what is in the snapshot and if we dont't apply 
-                # that update before the next incoming update our orderbook will be off we essentially skipped/missed an update
+                # This section only necessary for 100ms update stream as we can request and receive a snapshot within 1 sec comfortably 100ms on the otherhand may cause some issues because we may have recieved
+                #  an update that is newer than what is in the snapshot and if we dont't apply that update before the next incoming update our orderbook will be off
+                logMessage(f'Applying buffered messages to {self.symbol} orderbook', priority='Debug')
                 if len(self.ordBookBuff) >= 1: # <-- because we removed the wait before getting snapshot its possible no update messages came in so we have to make sure there are updates before trying to apply them (this will most likely onyl be neccesary at 100mS orderbook stream even then it may not be)
                     while self.ordBookBuff[0]['u'] <= self.last_uID: #ordBookBuff[0]['u'] != None and
-                        # print("current update in buffer has old data that is already incoroprated into orderbook snapshot")
-                        # print(f"deleting buffer update for {self.coin} - eventtime: {self.ordBookBuff[0]['E']}  -  First update ID : {self.ordBookBuff[0]['U']}   -   last update ID : {self.ordBookBuff[0]['u']} - # of events in update : {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
+                        logMessage(f"deleting buffer update already incoroprated into orderbook snapshot for {self.coin} - eventtime: {self.ordBookBuff[0]['E']}  -  First update ID : {self.ordBookBuff[0]['U']}   -   last update ID : {self.ordBookBuff[0]['u']} - # of events in update : {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}", priority='Debug')
                         del self.ordBookBuff[0]
                         if len(self.ordBookBuff) == 0:
                             break
-                    print(f"new length after removing unneccessary updates : {len(self.ordBookBuff)} \n")
+                    logMessage(f"After removing unneccessary updates for {self.symbol}, new buffer length : {len(self.ordBookBuff)}", priority="Debug")
                     if len(self.ordBookBuff) >= 1 :
-                        print(f"first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']} - # of updates {float(self.ordBookBuff[0]['U'])-float(self.ordBookBuff[0]['u'])}")
-                        print(f" buffer size : {len(self.ordBookBuff)}")
+                        logMessage(f"{self.symbol} buffer : first UID left in buffer {self.ordBookBuff[0]['U']} -  last uID in buffer : {self.ordBookBuff[-1]['u']} - buffer size : {len(self.ordBookBuff)}", priority="Debug")
                         for ind, eachUpdate in enumerate(self.ordBookBuff):
-                            print(f" performing update for # {ind} out of {len(self.ordBookBuff)} for {self.symbol}")
+                            logMessage(f"Performing update #{ind} out of {len(self.ordBookBuff)} on {self.symbol} buffer ", priority='Debug')
                             self.updateOrderBook(eachUpdate)
                         self.ordBookBuff = []
-                    # else:
-                    #     print("nothing left in buffer - taking next available/incoming message frame \n")
+                    else:
+                        logMessage("nothing left in buffer - taking next available/incoming message frame.", priority='Debug')
                 else:
-                    print("No update messages arrived while rertreiving orderbook snapshot")
+                    logMessage("No update messages arrived while rertreiving orderbook snapshot. Taking next available/incoming message frame.", priority='Debug')
                 self.SnapShotRecieved = True
                 #------------------------------
             self.snapshotTimerError.clear()
             snapshotRequestTimer = threading.Thread(target=self.snapshotTimer, daemon=True)
             snapshotRequestTimer.start()
         else:
-            print(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)}\nReason : {orderBookEncoded.reason}') #RESTfull request failed 
+            logMessage(f'Error retieving order book. Status code : {str(orderBookEncoded.status_code)} -- Reason : {orderBookEncoded.reason}', priority='Error') #RESTfull request failed 
         return
 
     def addSelfToStream(self, ws):
+        logMessage(f'Connecting websockets data stream for {self.symbol}', priority='Info')
         # msgtype "sub" for subscribing and "unsub" or anything else for unsubscribing
         message = {"method": "SUBSCRIBE", "params": self.streams, "id": 1 }
         ws.send(json.dumps(message))
@@ -244,6 +267,7 @@ class coin:
         getsnapshot.start()
     
     def removeSelfFromStream(self, ws):
+        logMessage(f'Disconnecting websockets data stream for {self.symbol}', priority='Info')
         message = {"method": "UNSUBSCRIBE", "params": self.streams, "id": 1 }
         ws.send(json.dumps(message))
 
@@ -255,41 +279,43 @@ def on_message(ws, message, SecuritiesRef):
             # although it should be possbile to recieve an update within the time period between orderbook updates from websocket stream best practice is to log any messages as well
             if CoinObj.SnapShotRecieved == False:
                 CoinObj.ordBookBuff.append(messaged['data'])
-                print('appending message to buffer')
+                logMessage(f'Appending message to buffer for {getattr(CoinObj, "coin")}', priority='Debug')
             else:
-                print(f"orderbook update for {getattr(CoinObj, 'coin')} with eventtime : {messaged['data']['E']} - last recorded ID {CoinObj.last_uID} - message: first UID: {messaged['data']['U']}  last uID : {messaged['data']['u']} ")
+                logMessage(f"Orderbook update for {getattr(CoinObj, 'coin')} - last recorded ID: {CoinObj.last_uID} -- Update = eventtime : {messaged['data']['E']}, first UID: {messaged['data']['U']},  last uID : {messaged['data']['u']} ", priority='Debug')
                 # we will keep an up to date orderbook locally 
                 CoinObj.updateOrderBook(messaged['data'])
                 # it is more "efficient" or rather we can save a lot of disk space by only logging changes to the orderbook so we take the message data and send it to be conditioned and logged
                 CoinObj.messageupdates(messaged['data'])
         elif fnmatch.fnmatch(messaged['stream'], "*@aggTrade"):
             CoinObj.addTrade(messaged['data']) #, messaged['E']
-        else:      #the catch all statement
-            print('Incoming message being handled incorrectly.')
     else:
-        print(f"\n\n\n\n Subscribing message\n{messaged}\n\n\n" )
-    # elif "result" in messaged:
-    #     if messaged['result'] == None:
-    #         print(f"\n\n\nSuccessfully (un)subscribed\n{messaged}\n\n\n")
-    # else:
-    #     print(f"Unexpected message handling\n{messaged}")
+        logMessage(f"WebSocket (un)subscribed from stream, message : {messaged}", priority='Info' )
+    # else:      #the catch all statement
+    #     logMessage(f'Incoming message being handled incorrectly. Message: {messaged}', priority='Error')
 
 def on_error(ws, error):
-    print(error)
+    logMessage(f'Websocket connection error: {error}', priority='Error')
 
 def on_close(ws, close_status_code, close_msg):
-    print("closed websocket connection")
+    logMessage("Closed websocket connection", priority='Info')
 
 def on_open(ws, url, Securities):
-    print(f'opened connection to : {url} \n')
+    logMessage(f'Websocket connected to : {url}', priority='Info')
     for coinObjects in Securities.values():
         snapshotthread = threading.Thread(target= coinObjects.getOrderBookSnapshot, daemon=True)
         snapshotthread.start()
 
 def main():
     # mongoDB connection object which we will use to log to database - _NOTE: MongoClient creates 2 threads
-    client = MongoClient('192.168.1.254:27017', username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
-    DBConn = client['orderbook&trades']
+    logMessage(f'Attempting to connect to mongoDB server at {mongoDBserver}')
+    try:
+        client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
+        DBConn = client['orderbook&trades']
+        logMessage('Successfully connected to mongoDB server', priority='Info')
+    except Exception as e:
+        logMessage(f'Error connecting to mongoDB server- Error: {e.__class__}', priority='Info')
+        logMessage(f'Fix issue and try again. Exiting ...', priority='Info')
+        exit(0)
     # instantiating objects for various securities - list of objects that will be used to create the base uri endpoint and subscribe to their relative streams
     # Securities = {'btc':coin("BTC", 1), 'ada':coin("ADA", 0.0001), 'eth':coin("ETH", 0.1), 'dot':coin("DOT", 0.001)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
     Securities = {'btc':coin("BTC", 1, DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
@@ -307,11 +333,14 @@ def main():
             uriEndpoint +=  item
             if index-1 < len(streams)-2:
                 uriEndpoint += '/'
-    print(f"uri endpoint : {uriEndpoint}")
+    logMessage(f"Attempting to connect to WebSocket endpoint : {uriEndpoint}", priority='Info')
     # websocket for handling updates -  _NOTE: websocket creates 1 threads
     ws = WebSocketApp(uriEndpoint, on_open=partial(on_open, url=uriEndpoint, Securities=Securities), on_message=partial(on_message, SecuritiesRef=Securities), on_error=on_error, on_close=on_close) #, on_ping=on_ping
     listeningForMessages = threading.Thread(target = ws.run_forever, daemon=True) #threading.Thread(target = ws.run_forever, daemon=True, kwargs={'ping_interval':300, 'ping_timeout':10, 'ping_payload':'pong'})
     listeningForMessages.start()
+    # because websocket connections to binance only last 24 hours we will need to manually reconect after around 22 hours
+    # main thread is being blocked by remote server so we need to create a thread that waits ~21-23 hours and then closes the connection and starts a new one
+
     #-------------------------------------------------------------------------------------------------------------------------------
     # _NOTE: BaseManager creates 1 threads
     # # custom class - throws client exception : multiprocessing.managers.RemoteError: KeyError: 'RemoteOperations'
@@ -326,19 +355,24 @@ def main():
     # _NOTE: Used to fire off get orderbook snapshot threads here however during testing it was found that the server can be delayed and websocket connection/ getting orderbook may not be timed correctly
     #  therefore it is safer to get orderbook AFTER a websocket connection is established
     try:
+        logMessage('Entering steady state/main loop of application', priority='Info')
         server.serve_forever()
     except BaseException as e:
         if e == 0:
             closemsg = f"Closed multiprocessing server as expected"
       
         else:
-            closemsg = f"Unexpected error when closing multiprocessing server : {e}"
+            closemsg = f"Unexpected error with main blocking statement or closing down BaseManager : {e}"
         # with open('fintechappLog.txt', 'a') as file:
         #     print(f"{datetime.now()} -  priority: 1 \n{closemsg}", file=file)
-        print(closemsg)
+        logMessage(closemsg, priority='Info')
+    except:
+        logMessage('Error opening Remote Server and therefore cannot enter maing loop of application ', priority='Error')
+    logMessage('Closing websocket Connection and joining it\'s thread in preparation for application exit.', priority='Info')
     ws.close()
     listeningForMessages.join()
-    print(f"active threads J : {threading.active_count()}")
+    logMessage(f"Active threads : {threading.active_count()}", priority='Debug')
+    logMessage('Exitting application ...', priority='Info')
     exit(0)
 
 if __name__ == "__main__":
