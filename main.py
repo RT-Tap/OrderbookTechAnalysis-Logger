@@ -5,15 +5,14 @@ import json
 import threading
 import time
 import fnmatch # needed for string wildcard matching
-from keyboard import wait as keyboardwait
 from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
-from enum import Enum
+import os
 
 # highest level of information that we should log
-LOGLEVEL = 'Debug'
-mongoDBserver = '192.168.1.254:27017'
+LOGLEVEL = os.getenv('LOGLEVEL','Info')
+mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
 # this needs gloabel scope so that remoteManager can refrence it
 WSResetEvent= threading.Event()
 CurrentWebSocketTimerThread = None
@@ -81,7 +80,7 @@ class RemoteOperations:
     def getThreadCount(self):
         print(f'THREAD COUNT: {threading.active_count()} ')
         print(f'ENUMERATED THREADS:{threading.enumerate()} ')
-        return json.dumps({'activeCount': threading.active_count(), 'enumerated':threading.enumerate()})
+        return (f'Actively running threads : { threading.active_count()}')
     
     def resetWebSocket(self):
         logMessage(f'Received a request to reset websocket connection', priority='Info')
@@ -191,7 +190,7 @@ class coin:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
             try:
                 result=self.DBConn.insert_one(insertData)
-                logMessage(f"Inserted : \n {result}", priority='Debug')
+                logMessage(f"Database insert success : {result}", priority='Debug')
             except Exception as e:
                 logMessage(f"MongoDB insert error occured : {e}", priority='Error')
                 logMessage(f"Tried to insert: {insertData}", priority='Debug')
