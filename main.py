@@ -439,7 +439,7 @@ def main():
         logMessage('Error opening Remote Server and therefore cannot enter maing loop of application ', priority='Error')
     logMessage('Shutting down sequnce, closing websocket Connection,  joining any threads in preparation for application exit.', priority='Info')
     logMessage(f'Preshutdown thread count: {threading.active_count()}', priority='Debug')
-    
+    # regarding thread termination / joining: we dont need to .join() all threads they will exit/cleanup automatically: https://stackoverflow.com/questions/38275944/do-threads-in-python-need-to-be-joined-to-avoid-leakage
     # ws.close()                        # these two will just be ;taken care of in websockettimer
     # listeningForMessages.join()
     WSResetEvent.set()
