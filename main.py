@@ -8,16 +8,12 @@ import fnmatch # needed for string wildcard matching
 from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
-import os
+import os, sys
+# This can be run as an application (inside container) or as a service (requires .service file)
+if sys.argv[1] == 'service':
+    from systemd import journal
+    RUN_AS_SERVICE = True
 
-# highest level of information that we should log
-LOGLEVEL = os.getenv('LOGLEVEL','Info')
-mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
-# this needs gloabel scope so that remoteManager can refrence it
-WSResetEvent= threading.Event()
-CurrentWebSocketTimerThread = None
-# bad practice to abruptly end thread so we keep track of any we create but can't do much in the way of the threads our libraries spawn
-exitRoutine = False
 
 # this is handy because we will be using utc basically everywhere and to get back to local we use this
 def utc_to_local(utc_dt):
@@ -34,9 +30,13 @@ def logMessage(message, **kwargs):
     # 6 - info informational messages
     # 7 - debug
     # date - time - log level - Event - message
-    loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,8)))
-    if loglvl[kwargs['priority']] <= (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
-        print(f"{datetime.now()} - {'loglvl: '+ kwargs['priority']} : {message}")
+    if RUN_AS_SERVICE == True:
+        loglvl = dict(zip([journal.Priority.ERROR, journal.Priority.WARNING, journal.Priority.NOTICE, journal.Priority.INFO, journal.Priority.DEBUG], range(3,8)))
+        journal.send(message=message, priority=loglvl )
+    else:
+        loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,8)))
+        if loglvl[kwargs['priority']] <= (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
+            print(f"{datetime.now()} - {'loglvl: '+ kwargs['priority']} : {message}")
 
 class RemoteOperations:
     def __init__(self, ws, securitiesRef, messageServer, DBConn):
@@ -386,8 +386,8 @@ def main():
     logMessage(f'Attempting to connect to mongoDB server at {mongoDBserver}', priority='Info')
     try:
         # client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='orderbook&trades', authMechanism='SCRAM-SHA-256')
-        client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource='ProductionTest1', authMechanism='SCRAM-SHA-256')
-        DBConn = client['ProductionTest1']
+        client = MongoClient(mongoDBserver, username='mainworker', password='qwdgBm4vP5P5AkhS', authSource=mongoDBdatabase, authMechanism='SCRAM-SHA-256')
+        DBConn = client[mongoDBdatabase]
         logMessage('Successfully connected to mongoDB server', priority='Info')
     except Exception as e:
         logMessage(f'Error connecting to mongoDB server- Error: {e.__class__} \nExiting ...', priority='Info')
@@ -459,5 +459,16 @@ def main():
     exit(0)
 
 if __name__ == "__main__":
+    # highest level of information that we should log
+    LOGLEVEL = os.getenv('LOGLEVEL','Info')
+    mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
+    mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'TEST2')
+    # this needs gloabel scope so that remoteManager can refrence it
+    WSResetEvent= threading.Event()
+    CurrentWebSocketTimerThread = None
+    # bad practice to abruptly end thread so we keep track of any we create but can't do much in the way of the threads our libraries spawn
+    exitRoutine = False
+
+
     main()
 

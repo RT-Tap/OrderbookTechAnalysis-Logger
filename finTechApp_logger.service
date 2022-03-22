@@ -1,0 +1,48 @@
+# if we want to run as user, script stored anywhere usually user directory and unit file (finTechApp_logger.service) can be placed under:
+# ~/.config/systemd/user/, ~/.config/systemd/user.control/, /etc/systemd/user/, /run/systemd/user/, /usr/lib/systemd/user/
+# Run as system service (store script in /usr/local/lib) and unit file under
+# /etc/systemd/system/
+[Unit]
+Description=Part of finTechApp backend, logs finaincial data to database and has remote control
+After=multi-user.target
+
+[Service]
+# Type of service; for most part simple but we can notify systemd when we are done initalzing (with "systemd.daemon.notify('READY=1')") if other daemons depend on it with 
+# Type=notify
+Type=simple
+
+# working directory if necessary
+# WorkingDirectory=/someDirectory
+
+# can also import Environment files with a bunch of enviroment variables
+# EnvironmentFile=/someDirectory/envVars.env
+
+# when to restart, if service fails(exits with a non-zero exit code) we can ask systemd to try to restart automatically using: Restart=on-failure
+Restart=always
+
+# in Python, STDOUT and STDERR are buffered; will only show up after a newline (\n); 
+# our service's STDOUT and STDERR are pipes, and in this case the buffer is only flushed once it is full.
+# need to disable the buffering of STDOUT and STDERR
+Environment=PYTHONUNBUFFERED=1
+
+# Where should STDOUT go - defaults to whatever is defined in /etc/systemd/system.conf which defaults to jounral
+# But we can also use jounral and print to console using "journal+console" or just put it into a file  using one of following 
+# StandardOutput=append:/var/log/finTechApp_logger StandardOutput=truncate:/var/log/finTechApp_logger 
+
+# Highest LogLevel to write to journal/log - Takes a syslog log level - default info
+#  emerg (lowest log level, only highest priority messages), alert, crit, err, warning, notice, info, debug (highest log level, also lowest priority messages)
+# LogLevelMax=
+
+# Command to execute when the service is started
+# the application/script to be run as service, in our case we add argument service to let script know we are running it as service
+# ExecStart=/usr/bin/python path/to/your/python_demo_service.py service
+ExecStart=/usr/bin/python3 /home/<username>/test.py service
+
+[Install]
+# when to start ( default.target essentially same as using multi-user.target)
+WantedBy=default.target
+
+# running the script
+# systemctl --user start python_demo_service
+# may need to reload the user daemon so that our service can be found
+# systemctl --user daemon-reload
