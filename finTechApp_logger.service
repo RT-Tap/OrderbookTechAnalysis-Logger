@@ -14,8 +14,8 @@ Type=simple
 # working directory if necessary
 # WorkingDirectory=/someDirectory
 
-# can also import Environment files with a bunch of enviroment variables
-# EnvironmentFile=/someDirectory/envVars.env
+# can also import Environment files with a bunch of enviroment variables (the - in front lets systemd ignore errors if the file does not exist.)
+# EnvironmentFile=-/someDirectory/envVars.env
 
 # when to restart, if service fails(exits with a non-zero exit code) we can ask systemd to try to restart automatically using: Restart=on-failure
 Restart=always
