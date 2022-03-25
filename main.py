@@ -9,7 +9,6 @@ from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
 import os, sys
-import math
 
 # handy function that allows us to go from utc to local and the original utc is timezone unaware
 def utc_to_local(utc_dt):
@@ -468,7 +467,7 @@ def main():
 if __name__ == "__main__":
     # This script can be run as an application (usually inside a container) or as a systemd service (requires .service file)
     if sys.argv[1] == 'service' or os.getenv('AS_SERVICE') == True:
-        from systemd import journal
+        from cysystemd import journal
         RUN_AS_SERVICE = True
     else: 
         RUN_AS_SERVICE = False

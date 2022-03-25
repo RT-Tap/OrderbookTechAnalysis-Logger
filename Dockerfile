@@ -1,6 +1,6 @@
 FROM python:3
 WORKDIR /fintechapp
-RUN apt-get install python-systemd python3-systemd
+#RUN apt-get install python-systemd python3-systemd
 COPY . .
 # COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
