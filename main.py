@@ -9,8 +9,7 @@ from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
 import os, sys
-
-
+import math
 
 # handy function that allows us to go from utc to local and the original utc is timezone unaware
 def utc_to_local(utc_dt):
@@ -37,11 +36,17 @@ class RemoteOperations:
         # functionality we need a way to terminate this thread - we do thhis by setting a stop event that in turn teminates itself
         self.messageServer = messageServer
         self.DBConn = DBConn
+        self.startTime = datetime.now()
 
     def addSecurity(self, newcoin, groupAmt, *pair):
         logMessage(f"Request to log  {newcoin}.", priority='Info')
-        self.securities[newcoin.lower()] = coin(newcoin.upper(), groupAmt, self.DBConn)
-        self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
+        if len(pair) == 0:
+            self.securities[newcoin.lower()] = coin(newcoin.upper(), groupAmt, self.DBConn)
+            self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
+        else:
+            self.securities[(newcoin+pair).lower()] = coin((newcoin+pair).upper(), groupAmt, self.DBConn)
+            self.securities[(newcoin+pair).lower()].symbol = (newcoin+pair).lower()
+            self.securities[newcoin.lower()].addSelfToStream(self.websocketConnection)
         return f"Successfully added {newcoin} to securities being logged."
     
     def removeSecurity(self, symbol):
@@ -52,7 +57,7 @@ class RemoteOperations:
         del self.securities[symbol]
         return f"Successfully removed {symbol} from being logged."
     
-    def RequestOrderbookSnapShot(self, symbol):
+    def requestOrderbookSnapShot(self, symbol):
         if symbol == 'ALL':
             logMessage(f"Manual request for new/updated orderbook snapshot for ALL securities currently being logged", priority='Info')
             for security in self.securities:
@@ -61,15 +66,17 @@ class RemoteOperations:
         else:
             logMessage(f"Manual request for new/updated orderbook snapshot for {symbol}", priority='Info')
             self.securities[symbol.lower()].snapshotTimerError.set()
+        return f'Seccessfully requested orderbook snapshot for {"ALL" if symbol == "ALL" else symbol}'
     
     def terminate(self):
         logMessage("Manual termination command received", priority='Info')
         self.messageServer.stop_event.set()
+        return 'Terminating program'
 
     def listSecurities(self):
         return self.securities.keys()
 
-    def ConnectionTest(self, gimme):
+    def connectionTest(self, gimme):
         logMessage(f"Remote connection test from:  {gimme} ", priority="Info")
         return "Success"
 
@@ -81,13 +88,21 @@ class RemoteOperations:
     def resetWebSocket(self):
         logMessage(f'received manual request to reset websocket connection', priority='Info')
         WSResetEvent.set()
+        return "received request for websocket reset"
     
     def retrieveCurrentOrderbook(self, security):
         return self.securities[security]['orderBook']
 
+    def elapsedRunningTime(self):
+        elapsedTime = datetime.now() - self.startTime
+        elapsedSeconds = elapsedTime.total_seconds()
+        minSec = divmod(elapsedSeconds, 60) # [ min, sec ]
+        hourMin = divmod(minSec[0], 60) #[hour, min]
+        dayHour = divmod(hourMin[0], 24) #[day, hour]
+        return f'Running Since: {self.startTime} , Elapsed Time: {dayHour[0]} days {dayHour[1]} hours {hourMin[1]} minutes {minSec[1]} seconds'
 
 class coin:
-    def __init__(self, name, groupAmt, DBConn, sigTradeLim=10000):
+    def __init__(self, name, DBConn, sigTradeLim=10000):
         self.coin = name.lower()
         self.symbol = name.lower() + "usdt"
         self.streams = [self.symbol + "@aggTrade", self.symbol + "@depth@"+orderbookUpdateFrequency+"ms"]
@@ -95,7 +110,7 @@ class coin:
         self.last_uID = 0
         self.eventTime = 0
         # this should be changed into a function that determines the grouping so that there are 5 significant figures for grouping eg, 40000 = 1 , 25 = 0.001 , 3 = 0.0001 , 0.99 = 0.00001, anything more isnt usefull
-        self.tradeSigFig = groupAmt   
+        # self.tradeSigFig = groupAmt   
         self.ordBookBuff = []
         self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}}
@@ -141,9 +156,30 @@ class coin:
             self.logMessage(f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}", priority='Warning')
             self.snapshotTimerError.set()
 
+    def defineTradeSignificantFigure(self,price):
+        tradeSigFig = None
+        if price / 10000 > 1 :
+            tradeSigFig = 1
+        elif price / 1000 > 1 :
+            tradeSigFig = 0.1
+        elif price / 100 > 1:
+            tradeSigFig = 0.001
+        elif price / 10 > 1:
+            tradeSigFig = 0.0001
+        elif price / 1 > 1:
+            tradeSigFig = 0.00001
+        elif price / 0.1 > 1:
+            tradeSigFig = 0.000001
+        elif price / 0.01 > 1:
+            tradeSigFig = 0.0000001
+        else:
+            tradeSigFig = 0.00000001
+        return tradeSigFig
+
     def addTrade(self, tradeData): # 
-        # round all trades up to predetermined sigfigs
-        price = float(tradeData['p']) - (float(tradeData['p']) % self.tradeSigFig) + self.tradeSigFig
+        tradeSigFig = self.defineTradeSignificantFigure(tradeData['p'])
+        # round all trades up to figures that actually matter in order to group them
+        price = float(tradeData['p']) - (float(tradeData['p']) % tradeSigFig) + tradeSigFig
         # if buyer is market maker then this trade was a sell
         if tradeData['m'] == True:
             self.trades['sold'].update({price:((self.trades["sold"][price] if price in  self.trades["sold"] else 0) + float(tradeData["q"]))})
@@ -379,7 +415,7 @@ def main():
         logMessage(f'Error connecting to mongoDB server- Error: {e.__class__} \nExiting ...', priority='Info')
         exit(2)
     # instantiating objects for various securities we want to track 
-    Securities = {'btc':coin("BTC", 1, DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
+    Securities = {'btc':coin("BTC", DBConn)}#, 'ada':coin("ADA", 0.0001, DBConn), 'eth':coin("ETH", 0.1, DBConn), 'dot':coin("DOT", 0.001, DBConn)} # 10,000-100,000 : 1 \ 1,000-10,000 : 0.1 \ 100-1000 : 0.01 \ 10-100 : 0.001 \ 1-10 : 0.0001
     uriEndpoint = createWebSocketURL(Securities)
     logMessage(f"Attempting to connect to WebSocket endpoint : {uriEndpoint}", priority='Info')
     # websocket for handling updates -  DEBUG_NOTE: websocket creates 1 threads
@@ -396,7 +432,7 @@ def main():
     websocketResetTimer.start()
     #-------------------------------------------------------------------------------------------------------------------------------
     # _NOTE: BaseManager creates 1 threads
-    manager = BaseManager(address=('', 12345), authkey=b'secret')
+    manager = BaseManager(address=('', managerPort), authkey=managerAuthkey.encode())  # authkey=b'secret'
     server = manager.get_server()
     manager.register('RemoteOperations', partial(RemoteOperations, ws= websocektTimerArgPackage['websocket'],  securitiesRef=Securities, messageServer=server, DBConn= DBConn)) # websocket here needs to be a refrence as it will update on new connection
     #-------------------------------------------------------------------------------------------------------------------------------
@@ -437,9 +473,13 @@ if __name__ == "__main__":
     else: 
         RUN_AS_SERVICE = False
     LOGLEVEL = os.getenv('LOGLEVEL','Info')    # highest level of information that we should log
+    if os.getenv('DEBUG') == True:
+        LOGLEVEL = 'Debug'
     mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
     mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'TEST2')
     orderbookUpdateFrequency = str(os.getenv('ORDERBOOK_UPDATEFREQUENCY', '1000'))
+    managerPort = int(os.getenv('MANAGER_PORT', 66345))
+    managerAuthkey = os.getenv('MANAGER_AUTHKEY', 'secret')
     WSResetEvent= threading.Event()     # Event flag that will allow us to cut timer short and reset the websocekt
     CurrentWebSocketTimerThread = None  # allows us to keep track of websocket timer; binance allows connection for 24 hours then kicks off so we must  establish a new connection before then
     exitRoutine = False # allows us to exit some loops gracefully 

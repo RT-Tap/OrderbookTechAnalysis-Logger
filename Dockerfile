@@ -1,10 +1,9 @@
 FROM python:3
-
-WORKDIR /usr/src/app
+WORKDIR /fintechapp
 RUN apt-get install python-systemd python3-systemd
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
+# COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 CMD [ "python", "main.py" ]
 # $ docker build -t my-python-app .
 # $ docker run -it --rm --name my-running-app my-python-app
