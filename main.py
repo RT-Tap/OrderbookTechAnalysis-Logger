@@ -466,7 +466,7 @@ def main():
 
 if __name__ == "__main__":
     # This script can be run as an application (usually inside a container) or as a systemd service (requires .service file)
-    if sys.argv[1] == 'service' or os.getenv('AS_SERVICE') == True:
+    if os.getenv('AS_SERVICE') == True:
         from cysystemd import journal
         RUN_AS_SERVICE = True
     else: 
