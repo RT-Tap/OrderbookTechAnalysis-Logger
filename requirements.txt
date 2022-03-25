@@ -1,3 +1,4 @@
+requests
 pymongo
 websocket-client
 # aarch64 / arm64

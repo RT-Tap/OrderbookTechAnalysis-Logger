@@ -3,8 +3,9 @@ FROM python:3.9
 WORKDIR /fintechapp
 COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
+EXPOSE 6634
 CMD [ "python", "main.py" ]
-# $ docker build -t my-python-app .
-# $ docker run -it --rm --name my-running-app my-python-app
+# $ docker build -t fintechapp_backend/logger:V0.1 .
+# $ docker run -it --rm --name myAppNamep fintechapp_backend/logger:V0.1
 # single python script
 # $ docker run -it --rm --name my-running-script -v "$PWD":/usr/src/myapp -w /usr/src/myapp python:3 python your-daemon-or-script.py
