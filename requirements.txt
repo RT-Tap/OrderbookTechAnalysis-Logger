@@ -1,4 +1,6 @@
-systemd
 pymongo
 websocket-client
-https://github.com/mosquito/cysystemd/releases/download/1.5.0/cysystemd-1.5.0-cp39-cp39-linux_aarch64.whl
+# aarch64 / arm64
+# https://github.com/mosquito/cysystemd/releases/download/1.5.0/cysystemd-1.5.0-cp39-cp39-linux_aarch64.whl
+# x86_64
+https://github.com/mosquito/cysystemd/releases/download/1.4.8/cysystemd-1.4.8-cp39-cp39-manylinux2014_x86_64.whl

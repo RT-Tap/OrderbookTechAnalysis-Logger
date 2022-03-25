@@ -1,8 +1,7 @@
-FROM python:3
+# systemd package supports 3.9 at the highest atm if run onyl as application and not service remove from requirements.txt then we can use 3.1x
+FROM python:3.9
 WORKDIR /fintechapp
-#RUN apt-get install python-systemd python3-systemd
 COPY . .
-# COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 CMD [ "python", "main.py" ]
 # $ docker build -t my-python-app .
