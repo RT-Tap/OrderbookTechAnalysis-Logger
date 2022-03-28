@@ -8,4 +8,4 @@ CMD [ "python", "main.py" ]
 # $ docker build -t fintechapp_backend/logger:V0.1 .
 # $ docker run -it --rm --name myAppNamep fintechapp_backend/logger:V0.1
 # single python script
-# $ docker run -it --rm --name my-running-script -v "$PWD":/usr/src/myapp -w /usr/src/myapp python:3 python your-daemon-or-script.py
+# $ docker run -it --rm --name test -v "$PWD":/usr/src/myapp -w /usr/src/myapp python:3 python your-daemon-or-script.py

@@ -1,6 +1,7 @@
 import argparse
 from audioop import add
 from multiprocessing.managers import BaseManager
+from multiprocessing import AuthenticationError
 from re import sub
 import time
 import socket # this is just used to get our local ip
@@ -32,10 +33,14 @@ def send_requestOrderbookSnapshot(connection, security):
     print(connection.requestOrderbookSnapshot(security))
 
 def send_listSecurities(connection):
-    print(print(connection.listSecurities()))
+    print(connection.listSecurities())
 
 def send_connectionTest(connection):
-    print(connection.connectionTest(ourIP))
+    try:
+        result = connection.connectionTest(ourIP)
+        print(result)
+    except Exception as e:
+        print(f'Could not connect. \n{e}')
 
 def send_getThreadCount(connection):
     print(connection.getThreadCount())
@@ -44,6 +49,7 @@ def send_resetWebSocket(connection):
     print(connection.resetWebSocket())
 
 def send_retrieveCurrentOrderbook(connection, security):
+
     print(connection.retrieveCurrentOrderbook(security))
 
 def send_elapsedRunningTime(connection):
@@ -59,8 +65,8 @@ def send_terminate(connection):
     except:
         print('Successfully terminated program.')
 
-host = os.getenv('LOGGER_SERVER_IP', '182.16.0.8')
-port= int(os.getenv('MANAGER_PORT', 66345))
+host = os.getenv('LOGGER_SERVER_IP', '127.0.0.1') #182.16.0.8
+port= int(os.getenv('MANAGER_PORT', 6634))
 authkey=os.getenv('MANAGER_AUTHKEY', 'secret')
 ourIP = get_local_ip()
 
@@ -77,13 +83,24 @@ if change == 'y' or change == 'yes':
         if update == 'y' or update =='yes':
             change = 'n'
 
+try:
+    try:
+        try:
+            m = BaseManager(address=(host, int(port)), authkey=authkey.encode())     # authkey=b'secret'
+            m.register('RemoteOperations')
+            m.connect()
+            remoteops = m.RemoteOperations()
+        except ConnectionRefusedError as e:
+            print(f'Connection was refused by server, possibly due to wrong port.\n{e}')
+            exit(0)
+    except TimeoutError as e:
+        print(f'Could not reach server.')
+        exit(0)
+except AuthenticationError as e:
+    print('You entered the wrong password.')
+    exit(0)
 
 
-
-m = BaseManager(address=(host, port), authkey=authkey.encode())     # authkey=b'secret'
-m.register('RemoteOperations')
-m.connect()
-remoteops = m.RemoteOperations()
 
 proceed = True
 
@@ -91,31 +108,29 @@ while proceed == True:
     command = input('Enter which command you would like to run:\n 0=requestOrderbookSnapShot\n1=addSecurity\n2=removeSecurity\n3=terminate\n4=listSecurities\n5=connectionTest\n6=getThreadCount\n7=resetWebSocket\n8=retrieveCurrentOrderbook\n9=elapsedRunningTime\n')
     if command == '0' :
         security = input('For what security :\n')
-        send_requestOrderbookSnapshot('test', security)
+        send_requestOrderbookSnapshot(remoteops, security)
     elif command == '1' or command == 'addSecurity':
         security = input('What security are we adding:\n')
-        send_addSecurity('test', security)
+        send_addSecurity(remoteops, security)
     elif command == '2' or command == 'removeSecurity':
         security = input("what security would you like to remove:\n")
-        send_removeSecurity('lol', security)
+        send_removeSecurity(remoteops, security)
     elif command == '3':
-        send_terminate('test')
+        send_terminate(remoteops)
     elif command == '4':
-        send_listSecurities('conn')
+        send_listSecurities(remoteops)
     elif command == '5':
-        send_connectionTest('ok')
+        send_connectionTest(remoteops)
     elif command == '6':
-        send_getThreadCount('plz')
+        send_getThreadCount(remoteops)
     elif command == '7':
-        send_resetWebSocket('lodk')
+        send_resetWebSocket(remoteops)
     elif command == '8':
-        send_retrieveCurrentOrderbook('ol')
+        security = input('What security do you want?\n')
+        send_retrieveCurrentOrderbook(remoteops, security)
     elif command == '9':
-        send_elapsedRunningTime('re')
-    else: print('please enter correct command')
-
-    runagain = input('Run Another command?\n')
-    if runagain  == 'n' or runagain == 'no' or runagain == 'exit':
+        send_elapsedRunningTime(remoteops)
+    else: 
         proceed = False
 
 
