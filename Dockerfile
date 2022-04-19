@@ -1,5 +1,5 @@
 # systemd package supports 3.9 at the highest atm if run onyl as application and not service remove from requirements.txt then we can use 3.1x
-FROM python:3.9
+FROM python3
 WORKDIR /fintechapp
 COPY . .
 RUN pip install --no-cache-dir -r requirements.txt

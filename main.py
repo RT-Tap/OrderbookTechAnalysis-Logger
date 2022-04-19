@@ -1,15 +1,18 @@
+#!/usr/bin/env python
 from requests.api import get
-#from websocket import WebSocketApp
+# from pathlib import Path
+# import platform
 import websocket
 from functools import partial
 import json
 import threading
 import time
-import fnmatch # needed for string wildcard matching
+import fnmatch 
 from pymongo import MongoClient
 from multiprocessing.managers import BaseManager
 from datetime import datetime # dtime = datetime.now(); unixtime = datetime.utcnow() -  datetime.fromtimestamp(messaged['E']/100).strftime('%Y-%m-%d %H:%M:%S')}
 import os, sys
+import logging
 
 # handy function that allows us to go from utc to local and the original utc is timezone unaware
 def utc_to_local(utc_dt):
@@ -17,15 +20,11 @@ def utc_to_local(utc_dt):
     # convert from timestamp to date time: datetime.utcfromtimestamp(float(messaged['E'])/1000).strftime('%Y-%m-%d %H:%M:%S') 
 
 def logMessage(message, **kwargs):
-    # syslog levels ... 3 - error conditions exist, 4 - warning conditiosn exit, 5 - notice. normal but significant conditions exist, 6 - info informational messages, 7 - debug
-    # syslog log templae: date - time - log level - Event - message
-    if RUN_AS_SERVICE == True:
-        loglvl = {'Error':journal.Priority.ERROR, 'Warning':journal.Priority.WARNING, 'Notice':journal.Priority.NOTICE, 'Info':journal.Priority.INFO, 'Debug':journal.Priority.DEBUG}
-        journal.send(message=message, priority=loglvl[kwargs['priority']] )
-    else:
-        loglvl = dict(zip(['Error', 'Warning', 'Notice','Info', 'Debug'], range(3,8)))
-        if loglvl[kwargs['priority']] <= (loglvl[LOGLEVEL] if isinstance(LOGLEVEL, str) else LOGLEVEL) :
-            print(f"{datetime.now()} - {'loglvl: '+ kwargs['priority']} : {message}")
+    # loglvl = {'Error':journal.Priority.ERROR, 'Warning':journal.Priority.WARNING, 'Info':journal.Priority.INFO, 'Debug':journal.Priority.DEBUG}
+    # journal.send(message=message, priority=loglvl[kwargs['priority']] )
+    logger = {'Criticial': logging.critical,'Error':logging.error, 'Warning':logging.warning,  'Info':logging.info, 'Debug':logging.debug}
+    logger[kwargs['priority']](message) 
+        
 
 class RemoteOperations:
     def __init__(self, ws, securitiesRef, messageServer, DBConn, startTime):
@@ -36,7 +35,7 @@ class RemoteOperations:
         self.websocketConnection = ws
         self.securities = securitiesRef
         # were using BaseManager from multiprocessing library to incorporate inter process communication 
-        # although it/we doesn't/aren't actually start a new process but instead using a thread to accomodate this
+        # although it/we doesn't/aren't actually starting a new process but instead using a thread to accomodate this
         # functionality we need a way to terminate this thread - we do thhis by setting a stop event that in turn teminates itself
         self.messageServer = messageServer
         self.DBConn = DBConn
@@ -202,7 +201,6 @@ class coin:
         self.mongolog(updatedict)
 
     def mongolog(self, *update):
-        return
         # ID of mongoDB entry relies on whether an update was provided - if not update is provided we log the orderbook as we just received a snapshot otherwise we log the update
         ident =  str(datetime.timestamp(datetime.utcnow())*1000)+("snapshot" if not update else "update")
         # We dont want any data changing while were logging it could cause us to loose track of updates
@@ -353,7 +351,7 @@ def on_error(ws, error):
 
 def on_close(ws, close_status_code, close_msg):
     if close_status_code or close_msg:
-        logMessage(f"Server closed our websocket connection- close status code: {str(close_status_code)}, close message: {str(close_msg)}", priority='Notice')
+        logMessage(f"Server closed our websocket connection- close status code: {str(close_status_code)}, close message: {str(close_msg)}", priority='Warning')
     else:
         logMessage("Closed websocket connection", priority='Info')
 
@@ -480,16 +478,31 @@ def main():
     exit(0)
 
 if __name__ == "__main__":
+    if os.path.exists("vars.env"):
+        from dotenv import load_dotenv
+        load_dotenv()
     #websocket.enableTrace(True)
-    # This script can be run as an application (usually inside a container) or as a systemd service (requires .service file)
-    if os.getenv('AS_SERVICE', False) == True:
-        from cysystemd import journal
-        RUN_AS_SERVICE = True
-    else: 
-        RUN_AS_SERVICE = False
     LOGLEVEL = os.getenv('LOGLEVEL','Info')    # highest level of information that we should log
-    if os.getenv('DEBUG', False) == True:
-        LOGLEVEL = 'Debug'
+    logger = logging.getLogger()
+    logger.setLevel(logging.getLevelName(LOGLEVEL.upper()))
+    # if os.environ.get('LOG_LOCATION') == None:
+    #     logfile_location = str(Path.home())+"\AppData\Local\fintechapp_logger.log" if str(platform.system()) == 'Windows' else '/var/log/fintechapp_logger.log'
+    # else: 
+    #     logfile_location = os.getenv('LOG_LOCATION')
+    # file_handler = logging.FileHandler(logfile_location)
+    # file_handler.setLevel(logging.getLevelName(LOGLEVEL.upper()))
+    # file_handler.setFormatter(logging.Formatter('%(asctime)s : %(levelname)s : %(message)s'))
+    # logger.addHandler(file_handler)
+    # if os.getenv('AS_SERVICE', False) == True:
+    #     from cysystemd import journal
+    #     journal_handler = journal.JournaldLogHandler()
+    #     journal_handler.setFormatter(logging.Formatter('%(levelname)s : %(message)s'))
+    #     logger.addHandler(journal_handler)
+    # else:
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setLevel(logging.getLevelName(LOGLEVEL.upper()))
+    stdout_handler.setFormatter('%(asctime)s : %(levelname)s : %(message)s')
+    logger.addHandler(stdout_handler)
     mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
     mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'TEST2')
     orderbookUpdateFrequency = str(os.getenv('ORDERBOOK_UPDATEFREQUENCY', '1000'))
