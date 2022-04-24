@@ -480,7 +480,7 @@ def main():
 if __name__ == "__main__":
     if os.path.exists("vars.env"):
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv("vars.env")
     #websocket.enableTrace(True)
     LOGLEVEL = os.getenv('LOGLEVEL','Info')    # highest level of information that we should log
     logger = logging.getLogger()
@@ -501,7 +501,7 @@ if __name__ == "__main__":
     # else:
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.getLevelName(LOGLEVEL.upper()))
-    stdout_handler.setFormatter('%(asctime)s : %(levelname)s : %(message)s')
+    stdout_handler.setFormatter(logging.Formatter('%(asctime)s : %(levelname)s : %(message)s'))
     logger.addHandler(stdout_handler)
     mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
     mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'TEST2')
