@@ -18,7 +18,7 @@ class coin:
         self.orderBook = {'bids':{}, 'asks':{}}
         self.trades = {'bought':{}, 'sold':{}} # in respect to the aggresor / taker behaviour - e.g market order to buy would be a 'bought event'
         self.got_orderbook_snapshot = False
-        self.last_trade = 0
+        self.last_trade = []
         self.retreive_orderbook_pause_event = threading.Event()
 
     
@@ -41,14 +41,13 @@ class coin:
             while len(self.message_buffer) > 0:
                 logger.debug(f'message buffer length: {len(self.message_buffer)} ')
                 if self.message_buffer[0]['sequence'] <= self.message_sequence_id:
-                    logger.debug(f'Popped order {self.message_buffer[0]["order_id"]} with sequence id:{self.message_buffer[0]["sequence"]} - snapshot sequence id: {self.message_sequence_id} ')
+                    logger.debug(f'Popped message with sequence id:{self.message_buffer[0]["sequence"]} - snapshot sequence id: {self.message_sequence_id} ')
                     self.message_buffer.pop(0)
                 else:
                     logger.debug(f'Processing order in buffer - msg sequence: {self.message_buffer[0]["sequence"]} - ordbook sequence: {self.message_sequence_id} ')
                     self.process_message(self.message_buffer[0], True)
                     logger.debug(f'Removing processed message.')
                     self.message_buffer.pop(0)
-            logger.debug(f"!!!*******!!!!!!******!!!!YYYYYYAAAAAAAAYYYYYYYYYY WEE MADE IT!!!!!!!!!!!!**********!!!!!!!!!!!!")
             logger.debug(f"Done processing message buffer. Verifying length of message buffer is 0 - {'True' if len(self.message_buffer) == 0 else 'False' }")
             self.got_orderbook_snapshot = True
         else:
@@ -57,7 +56,6 @@ class coin:
     
     def process_message(self, message, *buffer_message):
         if self.got_orderbook_snapshot is False and not buffer_message: # need this buffer message check or else well just keep adding messages we intend to proces to the end of buffer
-            # print(f"buffer_message: {buffer_message} - deubg check - not: {'ok' if not buffer_message else 'not_ok'} - len : {len(buffer_message)}")
             logger.debug(f'appending with sequence_id {message["sequence"]} to buffer')
             self.message_buffer.append(message)
         else:
@@ -105,7 +103,7 @@ class coin:
                 logger.debug(f'trade occured between {message["maker_order_id"]} and {message["taker_order_id"]} ')
                 aggresor_side = 'bought' if message['side'] == 'sell' else 'sold'
                 self.trades[aggresor_side][float(message['price'])] = message['size']
-                self.last_trade = message['price']
+                self.last_trade = [message['price'], message['size']]
             # ✔ change an order - from what i understand only happens due to self trade prevention but can also happen to order on orderbook although not sure how this is accomplished 
             elif message['type'] == 'change':
                 try:
@@ -141,8 +139,7 @@ class coin:
         # match
         # change
         # activate
-        #    self.livelog()
-
+        # if len(self.message_buffer)== 0: self.livelog()
 
     def livelog(self):
         UP = "\x1B[3A"
@@ -150,7 +147,7 @@ class coin:
         best_bid = max([ord[0] for ord in (self.orderBook['bids'][ord_id] for ord_id in self.orderBook['bids'])])
         best_ask = min([ord[0] for ord in (self.orderBook['asks'][ord_id] for ord_id in self.orderBook['asks'])])
         print('\n\n')
-        print(f'{UP}{UP}Recieved orders: {len(self.received_orders)}{CLR}\n{UP}{ [msg["order_id"] for msg in self.received_orders] }{CLR}\nBest bid:{best_bid} Best ask:{best_ask} last trade:{self.last_trade}{CLR}')
+        print(f'{UP*2}Recieved orders: {len(self.received_orders)}{CLR}\n{[msg["order_id"] for msg in self.received_orders]}{CLR}\nBest bid:{best_bid} Best ask:{best_ask} last trade:{self.last_trade if len(self.last_trade) == 2 else "no trades yet"}{CLR}')
 
 
 def on_message(ws, message, securities):
@@ -208,7 +205,7 @@ def main():
     # pause until key is pressed
     try:
         # print(f'4 - thread count: {threading.active_count()}\nActive threads: {threading.enumerate()}')
-        input("Press enter to continue\n")
+        input("\n\n\nPress enter to continue\n")
     except SyntaxError:
         pass
 
@@ -218,13 +215,13 @@ if __name__ == "__main__":
         from dotenv import load_dotenv
         load_dotenv()
     #websocket.enableTrace(True)
-    log_level = os.getenv('LOGLEVEL','Debug')    # highest level of information that we should log
+    log_level = os.getenv('LOGLEVEL','Debug').upper()    # highest level of information that we should log
     logger = logging.getLogger()
     # logger.setLevel(logging.DEBUG)
-    logger.setLevel(logging.getLevelName(log_level.upper()))
+    logger.setLevel(logging.getLevelName(log_level))
     stdout_handler = logging.StreamHandler(sys.stdout)
     # stdout_handler.setLevel(logging.DEBUG)
-    stdout_handler.setLevel(logging.getLevelName(log_level.upper()))
+    stdout_handler.setLevel(logging.getLevelName(log_level))
     stdout_handler.setFormatter(logging.Formatter('%(asctime)s : %(levelname)s : %(message)s'))
     # logger.addHandler(stdout_handler)
     file_handler = logging.FileHandler('coinbase_log')

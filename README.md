@@ -1,3 +1,13 @@
+
+
+ This is considers level 3 data in traditional markets and because 
+
+# About
+This repo is part of a larger collection of repositories that makes up a project who's end goal is to provide additional forms of technical analysis based on a securities orderbook as it currently stands versus how it looked in the past.
+
+
+. aims to provide  log the orderbook and trades that occur on a specific market for specific securities.  The 
+
 environment variables used across different ways to run:
 LOGLEVEL= the lowest log level to be displayed/logged- 'Error', 'Warning', 'Notice','Info', 'Debug' - default=INFO - this order is decreasing severity but increasing verbosity
 MONGODB_ENDPOINT= mongoDB server, IP:port - ex: 182.16.0.3:27017

@@ -159,6 +159,7 @@ class coin:
             self.logMessage(f"ERROR! - Orderbook ask/bid Overlap! \nmax bid : { (max(self.orderBook['bids'], key=self.orderBook['bids'].get))} - min ask : {min(self.orderBook['asks'], key=self.orderBook['asks'].get)}", priority='Warning')
             self.snapshotTimerError.set()
 
+    # defines the resolution of the data we want to keep
     def defineTradeSignificantFigure(self,price):
         tradeSigFig = None
         if price / 10000 > 1 :
