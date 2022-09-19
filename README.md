@@ -7,17 +7,7 @@ Log level2/3 financial data about a security for later analysis.  However as sta
 
 ## How to rum
 This (sub)module is meant to be run one of 2 different ways - regardless which way is chosen, all the necessary setup scripts are available for each route
-- As a service (possibly in the same container as the mongoDB database)
-    - systemd
-    automatic:
-  run service-setup.sh
-manual:
-  install requirements.txt (requests, pymongo, websocket-client)
-  move vars.env /etc/systemd/fintechapp.conf
-  move finTechApp_logger.service to  /etc/systemd/user/fintechapp_logger.service (or ~/.config/systemd/user/, ~/.config/systemd/user.control/, /etc/systemd/user/, /run/systemd/user/, /usr/lib/systemd/user)
-  move main.py to /usr/bin/fintechapp
-  chmod +x /usr/bin/fintechapp
-    - python 
+- A systemd service (possibly in the same container as the mongoDB database) 
 - A container as a component of a service which is created (and described) by the [OrderbookTechAnalysis-Intefration](https://github.com/RT-Tap/OrderbookTechAnalysis-Integration) repo.
 
 # level 2 binance vs level 3 coinbase dilemma
