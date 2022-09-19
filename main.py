@@ -216,7 +216,7 @@ class coin:
             self.trades['bought'] = {str(key): value for key, value in self.trades['bought'].items()}
             self.trades['sold'] = {str(key): value for key, value in self.trades['sold'].items()}
             # if updates exist (has truthiness can just test with "if update") we log those if not then we log the conditioned orderbook
-            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timstamp':datetime.timestamp(datetime.utcnow()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # if no update was passed in then we are logging the orderbook as we just got a new snapshot
+            insertData = { "_id" : ident, "type": "snapshot" if not update else "update", "DateTime": datetime.utcnow(), 'timestamp':datetime.timestamp(datetime.utcnow()), "symbol": self.symbol, "trades" : self.trades,  "orberbook" : conditionedOrderBook if not update else update[0]} # if no update was passed in then we are logging the orderbook as we just got a new snapshot
             # because were consolidating orders at realtively close to the same price points we also want to log any significant trade events that might be of interest when analyzing the data
             if len(self.significantTradeEvents) != 0:
                     insertData.update({'significantTradeEvents': self.significantTradeEvents})
@@ -514,6 +514,5 @@ if __name__ == "__main__":
     exitRoutine = False # allows us to exit some loops gracefully 
     # start the main thread/process
     main()
-## TODO:
-## UPDATE WEBSOCKET REFRENCE IN BASEMANAGER - Gets stale when new websocket is active
-## 
+
+    ## UPDATE WEBSOCKET REFRENCE IN BASEMANAGER - Gets stale when new websocket is active

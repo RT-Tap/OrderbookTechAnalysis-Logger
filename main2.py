@@ -234,8 +234,8 @@ if __name__ == "__main__":
 # // Request
 # // Subscribe to ETH-USD and ETH-EUR with the level2, heartbeat and ticker channels,
 # // plus receive the ticker entries for ETH-BTC and ETH-USD
-{
-    "type": "subscribe", 
-    "product_ids": [ "ETH-USD", "ETH-EUR"],
-    "channels": [ "level2", "heartbeat", { "name": "ticker", "product_ids": [ "ETH-BTC", "ETH-USD" ] }]
-}
+# {
+#     "type": "subscribe", 
+#     "product_ids": [ "ETH-USD", "ETH-EUR"],
+#     "channels": [ "level2", "heartbeat", { "name": "ticker", "product_ids": [ "ETH-BTC", "ETH-USD" ] }]
+# }
