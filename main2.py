@@ -211,7 +211,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.path.exists("vars.env"):
+    if os.path.exists("vars.env") and os.getenv('USE_ENV_FILE','False') == 'True':
         from dotenv import load_dotenv
         load_dotenv()
     #websocket.enableTrace(True)

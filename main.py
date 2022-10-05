@@ -479,7 +479,7 @@ def main():
     exit(0)
 
 if __name__ == "__main__":
-    if os.path.exists("vars.env"):
+    if os.path.exists("vars.env") and os.getenv('USE_ENV_FILE','False') == 'True':
         from dotenv import load_dotenv
         load_dotenv("vars.env")
     #websocket.enableTrace(True)
@@ -504,8 +504,8 @@ if __name__ == "__main__":
     stdout_handler.setLevel(logging.getLevelName(LOGLEVEL.upper()))
     stdout_handler.setFormatter(logging.Formatter('%(asctime)s : %(levelname)s : %(message)s'))
     logger.addHandler(stdout_handler)
-    mongoDBserver = os.getenv('MONGODB_ENDPOINT','192.168.1.254:27017')
-    mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'TEST2')
+    mongoDBserver = os.getenv('MONGODB_ENDPOINT','182.16.0.3:27017')
+    mongoDBdatabase = os.getenv("MONGODB_DATABASE", 'orderbook&trades')
     orderbookUpdateFrequency = str(os.getenv('ORDERBOOK_UPDATEFREQUENCY', '1000'))
     managerPort = int(os.getenv('MANAGER_PORT', 6634))
     managerAuthkey = os.getenv('MANAGER_AUTHKEY', 'secret')
